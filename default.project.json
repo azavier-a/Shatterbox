@@ -1,0 +1,11 @@
+{
+  "name": "Shatterbox",
+  "tree": {
+    "$className": "DataModel",
+
+    "ReplicatedStorage": {
+      "$path": "src/shared",
+      "$ignoreUnknownInstances": true
+    }
+  }
+}

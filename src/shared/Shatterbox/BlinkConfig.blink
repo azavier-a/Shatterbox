@@ -1,0 +1,144 @@
+option ServerOutput = "../Shatterbox/lib/Server.luau"
+option ClientOutput = "../Shatterbox/lib/Client.luau"
+
+
+enum PartType = {
+	Ball,
+	Block,
+	Cylinder,
+	Wedge,
+	CornerWedge
+}
+
+enum Material = {
+	Plastic,
+	SmoothPlastic,
+	Neon,
+	Wood,
+	WoodPlanks,
+	Marble,
+	Slate,
+	Concrete,
+	Granite,
+	Brick,
+	Pebble,
+	Cobblestone,
+	Rock,
+	Sandstone,
+	Basalt,
+	CrackedLava,
+	Limestone,
+	Pavement,
+	CorrodedMetal,
+	DiamondPlate,
+	Foil,
+	Metal,
+	Grass,
+	LeafyGrass,
+	Sand,
+	Fabric,
+	Snow,
+	Mud,
+	Ground,
+	Asphalt,
+	Salt,
+	Ice,
+	Glacier,
+	Glass,
+	ForceField,
+	Air,
+	Water,
+	Cardboard,
+	Carpet,
+	CeramicTiles,
+	ClayRoofTiles,
+	RoofShingles,
+	Leather,
+	Plaster,
+	Rubber
+}
+
+enum RaycastFilterType = {
+	Include,
+	Exclude
+}
+
+
+struct PartInstance {
+	CFrame : CFrame,
+	Size : vector,
+	Material : Material,
+	Transparency : f16
+}
+
+struct DestructionParamsType {
+	Shape : PartType,
+	CFrame : CFrame,
+	Size : vector,
+	
+	OverlapFilterType : RaycastFilterType?,
+	OverlapFilterDescendants : Instance[]?,
+	GridSize : f32?,
+	CleanupDelay : f32?,
+	SkipEncapsulatedVoxels : boolean?,
+	finalOpTick : u32?, -- Am I just fucked in 80 years? lol
+	ID : string,
+	
+	OnVoxelDestruct : string?,
+	DestructParameters : unknown[]
+}
+
+
+map VoxStatesArr = { [string] : CFrame }
+
+
+event SignalDestruction {
+	From: Server,
+	Type: Reliable,
+	Call: ManyAsync,
+	Data: DestructionParamsType
+}
+
+event SignalUndo {
+	From: Server,
+	Type: Reliable,
+	Call: ManyAsync,
+	Data: string
+}
+
+event SignalClearQueue {
+	From: Server,
+	Type: Reliable,
+	Call: ManyAsync
+}
+
+
+
+event MapReplicationCompleted {
+	From: Client,
+	Type: Reliable,
+	Call: SingleAsync,
+	Data: string
+}
+
+event UndoReplicationCompleted {
+	From: Client,
+	Type: Reliable,
+	Call: SingleAsync
+}
+
+
+
+event CreatePuppet {
+	From: Server,
+	Type: Reliable,
+	Call: ManyAsync,
+	Data: (string, PartInstance)
+}
+
+event ReplicatePuppetStates {
+	From: Server,
+	Type: Reliable,
+	Call: ManyAsync,
+	Data: VoxStatesArr
+}
