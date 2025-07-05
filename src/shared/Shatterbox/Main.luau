@@ -41,7 +41,7 @@ PrioritizeRecentN:
 
 local Settings = {}
 
-Settings.MaxDivisionsPerFrame = 100
+Settings.MaxDivisionsPerFrame = 200
 
 Settings.DefaultSmoothCleanupDelay = 60
 
