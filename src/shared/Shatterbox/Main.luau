@@ -87,9 +87,9 @@ Settings.PrioritizeRecentN = 10
 
 Settings.PuppetReplicationFrequency = 20
 
-Settings.ClientTweenPuppets = false
+Settings.ClientTweenPuppets = true
 
-Settings.PuppetReplicationFrameLimit = 1
+Settings.PuppetReplicationFrameLimit = 10
 
 Settings.PuppetSleepVelocity = 0.01
 
@@ -933,21 +933,14 @@ function Shatterbox.Puppeteer(voxel : Part)
 	voxel:AddTag(IndestructibleTag)
 	voxel.Parent = workspace.CurrentCamera
 
-	local noSleepDelay = 0.1
+	local noSleepDelay = 0.5
 	local accum = 0
 
 	local noSleepCon : RBXScriptConnection
 	noSleepCon = RunService.Heartbeat:Connect(function(deltaTime)
-
-		if voxel.AssemblyLinearVelocity.Magnitude < Settings.PuppetSleepVelocity then
-			noSleepCon:Disconnect()
-			return
-		end
-
 		accum += deltaTime
 		while accum > noSleepDelay do
 			accum -= noSleepDelay
-
 			voxel:ApplyImpulse(Vector3.yAxis * -0.0001)
 		end
 	end)
@@ -958,6 +951,7 @@ function Shatterbox.Puppeteer(voxel : Part)
 
 	table.insert(CreatePuppetQueue, { guid, voxel })
 	voxel.Destroying:Connect(function()
+		noSleepCon:Disconnect()
 		Puppets[guid] = nil
 
 		local found
