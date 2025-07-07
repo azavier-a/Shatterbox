@@ -358,7 +358,7 @@ end
 
 
 
-local function MarkDirty(Part : Part, dirtied)
+local function MarkDirty(Part : Part, dirtied, doNotReparent)
 
 	if Part:HasTag("ShatterboxDebris") then return end
 
@@ -374,7 +374,11 @@ local function MarkDirty(Part : Part, dirtied)
 			})
 		end
 
-		model.Parent = isClient and clientMapFolder or workspace.CurrentCamera
+		if doNotReparent then
+			model.Parent = PartParent
+		else
+			model.Parent = isClient and clientMapFolder or workspace.CurrentCamera
+		end
 
 		model.Name = Part.Name
 		model:AddTag("ShatterboxInstance")
@@ -406,7 +410,7 @@ local function HandleVoxelDestruction(callbackName : string?, voxel : Part, dirt
 end
 
 
-local function GetDestructibleParts(cuttingPart, overlapParams)
+local function GetDestructibleParts(cuttingPart, overlapParams, doNotReparent)
 	local dirtied = {}
 	local partsInPart = {}
 
@@ -416,7 +420,7 @@ local function GetDestructibleParts(cuttingPart, overlapParams)
 
 		if ShouldSkipInstance(part) then continue end
 
-		MarkDirty(part, dirtied) -- adds this part to the smooth cleanup for this destruction, if it's not already destroyed by something else
+		MarkDirty(part, dirtied, doNotReparent) -- adds this part to the smooth cleanup for this destruction, if it's not already destroyed by something else
 
 		table.insert(partsInPart, part)
 	end
@@ -550,7 +554,7 @@ local function ImaginaryVoxels(params)
 
 	local voxels = {} :: {Types.ImaginaryVoxel}
 
-	local partsInPart, destructibleParts = {}, GetDestructibleParts(params.CuttingPart, params.OverlapParams)
+	local partsInPart, destructibleParts = {}, GetDestructibleParts(params.CuttingPart, params.OverlapParams, true)
 	for _, part in ipairs(destructibleParts) do
 		table.insert(partsInPart, {
 			CFrame = part.CFrame,
