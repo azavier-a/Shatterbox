@@ -1,0 +1,105 @@
+struct Puppet {
+	GUID : string,
+	CFrame : CFrame,
+	Size : vector,
+	Color : Color3,
+	Material : u16(256..2311),
+	Transparency : f16
+}
+
+struct PartInstance {
+	CFrame : CFrame,
+	Size : vector,
+	Color : Color3,
+	Material : u16(256..2311),
+	Transparency : f16
+}
+
+struct DestructionParamsType {
+	Shape : u8(0..4),
+	CFrame : CFrame,
+	Size : vector,
+	
+	OverlapFilterType : u8(0..1)?,
+	OverlapFilterDescendants : Instance[]?,
+	GridSize : f32?,
+	CleanupDelay : f32?,
+	SkipEncapsulatedVoxels : boolean?,
+	ID : string,
+	
+	OnVoxelDestruct : string?,
+	DestructParameters : unknown[]
+}
+
+struct PuppetState { 
+	GUID : string,
+	CFrame : CFrame 
+}
+
+
+event SignalDestruction {
+	From: Server,
+	Type: Reliable,
+	Call: ManyAsync,
+	Data: DestructionParamsType
+}
+
+event SignalUndo {
+	From: Server,
+	Type: Reliable,
+	Call: ManyAsync,
+	Data: string
+}
+
+event SignalClearQueue {
+	From: Server,
+	Type: Reliable,
+	Call: ManyAsync
+}
+
+event SignalReset {
+	From: Server,
+	Type: Reliable,
+	Call: ManyAsync
+}
+
+
+
+event MapReplicationCompleted {
+	From: Client,
+	Type: Reliable,
+	Call: SingleAsync,
+	Data: string
+}
+
+
+
+event CreatePuppets {
+	From: Server,
+	Type: Reliable,
+	Call: ManyAsync,
+	Data: Puppet[]
+}
+
+event ReplicatePuppetStates {
+	From: Server,
+	Type: Reliable,
+	Call: ManyAsync,
+	Data: PuppetState[]
+}
+
+event DestroyPuppet {
+	From: Server,
+	Type: Reliable,
+	Call: ManyAsync,
+	Data: string
+}
+
+
+
+event ReplicateMap {
+	From: Server,
+	Type: Reliable,
+	Call: ManyAsync,
+	Data: PartInstance[]
+}
