@@ -885,7 +885,8 @@ local function ReplicateMapToNewPlayer(plr)
 			Size = child.Size,
 			Color = child.Color,
 			Material = child.Material.Value,
-			Transparency = child.Transparency
+			Transparency = child.Transparency,
+			GridSize = child:GetAttribute("GridSize")
 		})
 	end
 	for _, opDirty in pairs(opDirties) do
@@ -896,7 +897,8 @@ local function ReplicateMapToNewPlayer(plr)
 				Size = p.Size,
 				Color = p.Color,
 				Material = p.Material.Value,
-				Transparency = p.Transparency
+				Transparency = p.Transparency,
+				GridSize = p:GetAttribute("GridSize")
 			})
 		end
 	end
@@ -916,6 +918,7 @@ local function ReplicateMapFromServer(MapParts)
 		Part.Material = Enum.Material:FromValue(mapPart.Material)
 		Part.Transparency = mapPart.Transparency
 		Part.Parent = clientMapFolder
+		Part:SetAttribute("GridSize", mapPart.GridSize)
 	end
 end
 

@@ -153,7 +153,7 @@ local Queue: any = {
 
 Queue.Reliable[4] = table.create(256)
 export type Shatterbox_Puppet = { GUID: string, CFrame: CFrame, Size: Vector3, Color: Color3, Material: number, Transparency: number }
-export type Shatterbox_PartInstance = { CFrame: CFrame, Size: Vector3, Color: Color3, Material: number, Transparency: number }
+export type Shatterbox_PartInstance = { CFrame: CFrame, Size: Vector3, Color: Color3, Material: number, Transparency: number, GridSize: number? }
 export type Shatterbox_DestructionParamsType = { Shape: number, CFrame: CFrame, Size: Vector3, OverlapFilterType: number?, OverlapFilterDescendants: { Instance }?, GridSize: number?, CleanupDelay: number?, SkipEncapsulatedVoxels: boolean?, ID: string, OnVoxelDestruct: string?, DestructParameters: { any } }
 export type Shatterbox_PuppetState = { GUID: string, CFrame: CFrame }
 local function Shatterbox_WriteEVENT_SignalDestruction(Value: { Shape: number, CFrame: CFrame, Size: Vector3, OverlapFilterType: number?, OverlapFilterDescendants: { Instance }?, GridSize: number?, CleanupDelay: number?, SkipEncapsulatedVoxels: boolean?, ID: string, OnVoxelDestruct: string?, DestructParameters: { any } }): ()
@@ -421,14 +421,14 @@ local function Shatterbox_WriteEVENT_DestroyPuppet(Value: string): ()
 	buffer.writestring(SendBuffer, SendOffset, Value, Length)
 end
 
-local function Shatterbox_WriteEVENT_ReplicateMap(Value: { { CFrame: CFrame, Size: Vector3, Color: Color3, Material: number, Transparency: number } }): ()
+local function Shatterbox_WriteEVENT_ReplicateMap(Value: { { CFrame: CFrame, Size: Vector3, Color: Color3, Material: number, Transparency: number, GridSize: number? } }): ()
 	-- Allocate BLOCK: 3 bytes
 	local BLOCK_START = Allocate(3)
 	buffer.writeu8(SendBuffer, BLOCK_START + 0, 8)
 	-- START ARRAY
 	buffer.writeu16(SendBuffer, BLOCK_START + 1, #Value)
-		-- Allocate BLOCK: 43 bytes
-	local ARRAY_START_1 = Allocate(43 * #Value)
+		-- Allocate BLOCK: 44 bytes
+	local ARRAY_START_1 = Allocate(44 * #Value)
 	for Index = 1, #Value do
 		local Item_1 = Value[Index]
 		local Vector = Item_1.CFrame.Position
@@ -512,6 +512,37 @@ local function Shatterbox_WriteEVENT_ReplicateMap(Value: { { CFrame: CFrame, Siz
 				+ math.max(Exponent, 0) * 0x400
 				+ if float < 0 then 0x8000 else 0
 			buffer.writeu16(SendBuffer, OPERATION_OFFSET_13, Result)
+		end
+		-- Allocate 1
+		local OPERATION_OFFSET_14 = ARRAY_START_1
+		ARRAY_START_1 += 1
+		buffer.writeu8(SendBuffer, OPERATION_OFFSET_14, Item_1.GridSize ~= nil and 1 or 0)
+		if Item_1.GridSize ~= nil then
+			-- Allocate BLOCK: 2 bytes
+			local BLOCK_START = Allocate(2)
+			if Item_1.GridSize > 65504 then
+				buffer.writeu16(SendBuffer, BLOCK_START + 0, 0b0_11111_0000000000)
+			elseif Item_1.GridSize < -65504 then
+				buffer.writeu16(SendBuffer, BLOCK_START + 0, 0b1_11111_0000000000)
+			elseif Item_1.GridSize ~= Item_1.GridSize then
+				buffer.writeu16(SendBuffer, BLOCK_START + 0, 0b1_11111_0000000001)
+			elseif Item_1.GridSize == 0 then
+				buffer.writeu16(SendBuffer, BLOCK_START + 0, 0)
+			else
+				local float = Item_1.GridSize
+				local Abosulte = math.abs(float)
+				local Interval = math.ldexp(1, math.floor(math.log(Abosulte, 2)) - 10)
+				local RoundedValue = (Abosulte // Interval) * Interval
+				local Fraction, Exponent = math.frexp(RoundedValue)
+				Exponent += 14
+				local Mantissa = math.round(if Exponent <= 0
+					then Fraction * 0x400 / math.ldexp(1, math.abs(Exponent))
+					else Fraction * 0x800) % 0x400
+				local Result = Mantissa
+					+ math.max(Exponent, 0) * 0x400
+					+ if float < 0 then 0x8000 else 0
+				buffer.writeu16(SendBuffer, BLOCK_START + 0, Result)
+			end
 		end
 	end
 	-- END ARRAY
@@ -998,12 +1029,12 @@ local Returns = table.freeze({
 			end,
 		},
 		ReplicateMap = {
-			Fire = function(Player: Player, Value: { { CFrame: CFrame, Size: Vector3, Color: Color3, Material: number, Transparency: number } }): ()
+			Fire = function(Player: Player, Value: { { CFrame: CFrame, Size: Vector3, Color: Color3, Material: number, Transparency: number, GridSize: number? } }): ()
 				Load(PlayersMap[Player])
 				Shatterbox_WriteEVENT_ReplicateMap(Value)
 				PlayersMap[Player] = Save()
 			end,
-			FireAll = function(Value: { { CFrame: CFrame, Size: Vector3, Color: Color3, Material: number, Transparency: number } }): ()
+			FireAll = function(Value: { { CFrame: CFrame, Size: Vector3, Color: Color3, Material: number, Transparency: number, GridSize: number? } }): ()
 				Load()
 				Shatterbox_WriteEVENT_ReplicateMap(Value)
 				local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
@@ -1015,7 +1046,7 @@ local Returns = table.freeze({
 					PlayersMap[Player] = Save()
 				end
 			end,
-			FireList = function(List: {Player}, Value: { { CFrame: CFrame, Size: Vector3, Color: Color3, Material: number, Transparency: number } }): ()
+			FireList = function(List: {Player}, Value: { { CFrame: CFrame, Size: Vector3, Color: Color3, Material: number, Transparency: number, GridSize: number? } }): ()
 				Load()
 				Shatterbox_WriteEVENT_ReplicateMap(Value)
 				local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
@@ -1027,7 +1058,7 @@ local Returns = table.freeze({
 					PlayersMap[Player] = Save()
 				end
 			end,
-			FireExcept = function(Except: Player, Value: { { CFrame: CFrame, Size: Vector3, Color: Color3, Material: number, Transparency: number } }): ()
+			FireExcept = function(Except: Player, Value: { { CFrame: CFrame, Size: Vector3, Color: Color3, Material: number, Transparency: number, GridSize: number? } }): ()
 				Load()
 				Shatterbox_WriteEVENT_ReplicateMap(Value)
 				local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances

@@ -12,7 +12,8 @@ struct PartInstance {
 	Size : vector,
 	Color : Color3,
 	Material : u16(256..2311),
-	Transparency : f16
+	Transparency : f16,
+	GridSize : f16?
 }
 
 struct DestructionParamsType {

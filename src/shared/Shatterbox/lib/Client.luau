@@ -167,7 +167,7 @@ Queue.Reliable[7] = table.create(256)
 Events.Reliable[8] = {}
 Queue.Reliable[8] = table.create(256)
 export type Shatterbox_Puppet = { GUID: string, CFrame: CFrame, Size: Vector3, Color: Color3, Material: number, Transparency: number }
-export type Shatterbox_PartInstance = { CFrame: CFrame, Size: Vector3, Color: Color3, Material: number, Transparency: number }
+export type Shatterbox_PartInstance = { CFrame: CFrame, Size: Vector3, Color: Color3, Material: number, Transparency: number, GridSize: number? }
 export type Shatterbox_DestructionParamsType = { Shape: number, CFrame: CFrame, Size: Vector3, OverlapFilterType: number?, OverlapFilterDescendants: { Instance }?, GridSize: number?, CleanupDelay: number?, SkipEncapsulatedVoxels: boolean?, ID: string, OnVoxelDestruct: string?, DestructParameters: { any } }
 export type Shatterbox_PuppetState = { GUID: string, CFrame: CFrame }
 local function Shatterbox_ReadEVENT_SignalDestruction(): ({ Shape: number, CFrame: CFrame, Size: Vector3, OverlapFilterType: number?, OverlapFilterDescendants: { Instance }?, GridSize: number?, CleanupDelay: number?, SkipEncapsulatedVoxels: boolean?, ID: string, OnVoxelDestruct: string?, DestructParameters: { any } })
@@ -438,7 +438,7 @@ local function Shatterbox_ReadEVENT_DestroyPuppet(): (string)
 	return Value
 end
 
-local function Shatterbox_ReadEVENT_ReplicateMap(): ({ { CFrame: CFrame, Size: Vector3, Color: Color3, Material: number, Transparency: number } })
+local function Shatterbox_ReadEVENT_ReplicateMap(): ({ { CFrame: CFrame, Size: Vector3, Color: Color3, Material: number, Transparency: number, GridSize: number? } })
 	-- Read BLOCK: 2 bytes
 	local BLOCK_START = Read(2)
 	-- START ARRAY
@@ -446,8 +446,8 @@ local function Shatterbox_ReadEVENT_ReplicateMap(): ({ { CFrame: CFrame, Size: V
 	if Length < 0 then error(`Expected "Length" to be larger than 0, got {Length} instead.`) end
 	if Length > 65535 then error(`Expected "Length" to be smaller than 65535, got {Length} instead.`) end
 	local Value = table.create(Length)
-		-- Read BLOCK: 43 bytes
-	local ARRAY_START_1 = Read(43 * Length)
+		-- Read BLOCK: 44 bytes
+	local ARRAY_START_1 = Read(44 * Length)
 	for Index = 1, Length do
 		local Item_1 = {} :: any
 		-- Read 4
@@ -531,6 +531,37 @@ local function Shatterbox_ReadEVENT_ReplicateMap(): ({ { CFrame: CFrame, Size: V
 			end
 			local Result = math.ldexp(Fraction, Exponent - 14)
 			Item_1.Transparency = if Encoded // 0x8000 == 1 then -Result else Result
+		end
+		-- Read 1
+		local OPERATION_OFFSET_14 = ARRAY_START_1
+		ARRAY_START_1 += 1
+		if buffer.readu8(RecieveBuffer, OPERATION_OFFSET_14) == 1 then
+			-- Read BLOCK: 2 bytes
+			local BLOCK_START = Read(2)
+			Encoded = buffer.readu16(RecieveBuffer, BLOCK_START + 0)
+			local MantissaExponent = Encoded % 0x8000
+			if MantissaExponent == 0b0_11111_0000000000  then
+				if Encoded // 0x8000 == 1 then
+					Item_1.GridSize = -math.huge
+				else
+					Item_1.GridSize = math.huge
+				end
+			elseif MantissaExponent == 0b1_11111_0000000000   then
+				Item_1.GridSize = 0 / 0
+			elseif MantissaExponent == 0b0_00000_0000000000   then
+				Item_1.GridSize = 0
+			else
+				local Mantissa = MantissaExponent % 0x400
+				local Exponent = MantissaExponent // 0x400
+				local Fraction;
+				if Exponent == 0 then
+					Fraction = Mantissa / 0x400
+				else
+					Fraction = Mantissa / 0x800 + 0.5
+				end
+				local Result = math.ldexp(Fraction, Exponent - 14)
+				Item_1.GridSize = if Encoded // 0x8000 == 1 then -Result else Result
+			end
 		end
 		table.insert(Value, Item_1)
 	end
@@ -692,7 +723,7 @@ Reliable.OnClientEvent:Connect(function(Buffer: buffer, Instances: {Instance})
 				table.insert(Queue.Reliable[7], {Value} :: {any})
 			end
 		elseif Index == 8 then
-			local Value: { { CFrame: CFrame, Size: Vector3, Color: Color3, Material: number, Transparency: number } } = Shatterbox_ReadEVENT_ReplicateMap()
+			local Value: { { CFrame: CFrame, Size: Vector3, Color: Color3, Material: number, Transparency: number, GridSize: number? } } = Shatterbox_ReadEVENT_ReplicateMap()
 			if #Events.Reliable[8] > 0 then
 				for _, Listener in Events.Reliable[8] do
 					task.spawn(Listener, Value)
@@ -835,7 +866,7 @@ local Returns = table.freeze({
 			end
 		},
 		ReplicateMap = {
-			On = function(Listener: (Value: { { CFrame: CFrame, Size: Vector3, Color: Color3, Material: number, Transparency: number } }) -> ()): () -> ()
+			On = function(Listener: (Value: { { CFrame: CFrame, Size: Vector3, Color: Color3, Material: number, Transparency: number, GridSize: number? } }) -> ()): () -> ()
 				table.insert(Events.Reliable[8], Listener)
 				for Index, Arguments in Queue.Reliable[8] do
 					task.spawn(Listener, table.unpack(Arguments))
