@@ -939,7 +939,7 @@ function Shatterbox.Puppeteer(voxel : Part)
 	voxel:AddTag(IndestructibleTag)
 	voxel.Parent = workspace.CurrentCamera
 
-	local noSleepDelay = 0.5
+	local noSleepDelay = 0.1
 	local accum = 0
 
 	local noSleepCon : RBXScriptConnection
