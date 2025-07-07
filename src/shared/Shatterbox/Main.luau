@@ -2,7 +2,7 @@
 --!optimize 2
 
 
--- Shatterbox release 7.2
+-- Shatterbox release 7.3
 
 
 --#selene: allow(multiple_statements)
@@ -851,7 +851,6 @@ end
 local function ReplicatePuppetStates(puppetStates)
 	local numPuppets = 0
 	for _ in pairs(Puppets) do numPuppets += 1 end
-	print(#puppetStates, numPuppets)
     for _, state in ipairs(puppetStates) do
         local voxel = Puppets[state.GUID]
 		if not voxel then continue end
