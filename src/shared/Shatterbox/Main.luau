@@ -1197,6 +1197,42 @@ end
 
 
 
+
+local cachedOriginalClones = {} :: { [Model] : Part }
+
+local function deleteClone(model)
+	cachedOriginalClones[model]:Destroy()
+	cachedOriginalClones[model] = nil
+end
+
+-- Returns a clone of the original, untouched part (before it was ever voxelized).
+--
+-- This is used for effects like JJS where they obliterate walls but only minorly destroy what you are standing on.
+--
+-- If you use this within an OnVoxelDestruct callback, it is guaranteed to work.
+--
+-- Clones are cached for 5 seconds, so calling this function multiple times within that timeframe returns the same instance.
+function Shatterbox.GetOriginalPart(dirtyParent : Model) : Part?
+	local found = cachedOriginalClones[dirtyParent]
+	if found then return found end
+
+	for _, dirties in pairs(opDirties) do
+		for _, dirtied in ipairs(dirties.dirtied) do
+			if dirtied.model == dirtyParent then
+				local clone = dirtied.Part:Clone()
+				cachedOriginalClones[dirtyParent] = clone
+				task.delay(5, deleteClone, dirtyParent)
+				return clone
+			end
+		end
+	end
+
+	return nil
+end
+
+
+
+
 -- Will return true if "contains" is FULLY contained by "part", otherwise false
 function Shatterbox.PartEncapsulatesBlockPart(part : Part, contains : Part)
 	assert(part:IsA("Part"), "You can only use this function when a Part is the container.")
