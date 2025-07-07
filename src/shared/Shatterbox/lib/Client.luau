@@ -167,12 +167,12 @@ Queue.Reliable[7] = table.create(256)
 Events.Reliable[8] = {}
 Queue.Reliable[8] = table.create(256)
 export type Shatterbox_Puppet = { GUID: string, CFrame: CFrame, Size: Vector3, Color: Color3, Material: number, Transparency: number }
-export type Shatterbox_PartInstance = { CFrame: CFrame, Size: Vector3, Color: Color3, Material: number, Transparency: number, GridSize: number? }
-export type Shatterbox_DestructionParamsType = { Shape: number, CFrame: CFrame, Size: Vector3, OverlapFilterType: number?, OverlapFilterDescendants: { Instance }?, GridSize: number?, CleanupDelay: number?, SkipEncapsulatedVoxels: boolean?, ID: string, OnVoxelDestruct: string?, DestructParameters: { any } }
+export type Shatterbox_PartInstance = { CFrame: CFrame, Size: Vector3, Color: Color3, Material: number, Transparency: number, GridSize: number?, Tags: { string } }
+export type Shatterbox_DestructionParamsType = { Shape: number, CFrame: CFrame, Size: Vector3, FilterTagged: { string }?, GridSize: number?, CleanupDelay: number?, SkipEncapsulatedVoxels: boolean?, ID: string, OnVoxelDestruct: string?, DestructParameters: { any } }
 export type Shatterbox_PuppetState = { GUID: string, CFrame: CFrame }
-local function Shatterbox_ReadEVENT_SignalDestruction(): ({ Shape: number, CFrame: CFrame, Size: Vector3, OverlapFilterType: number?, OverlapFilterDescendants: { Instance }?, GridSize: number?, CleanupDelay: number?, SkipEncapsulatedVoxels: boolean?, ID: string, OnVoxelDestruct: string?, DestructParameters: { any } })
-	-- Read BLOCK: 47 bytes
-	local BLOCK_START = Read(47)
+local function Shatterbox_ReadEVENT_SignalDestruction(): ({ Shape: number, CFrame: CFrame, Size: Vector3, FilterTagged: { string }?, GridSize: number?, CleanupDelay: number?, SkipEncapsulatedVoxels: boolean?, ID: string, OnVoxelDestruct: string?, DestructParameters: { any } })
+	-- Read BLOCK: 46 bytes
+	local BLOCK_START = Read(46)
 	local Value = {} :: any
 	Value.Shape = buffer.readu8(RecieveBuffer, BLOCK_START + 0)
 	if Value.Shape < 0 then error(`Expected "Value.Shape" to be larger than 0, got {Value.Shape} instead.`) end
@@ -190,54 +190,50 @@ local function Shatterbox_ReadEVENT_SignalDestruction(): ({ Shape: number, CFram
 	Z = buffer.readf32(RecieveBuffer, BLOCK_START + 33)
 	Value.Size = Vector3.new(X, Y, Z)
 	if buffer.readu8(RecieveBuffer, BLOCK_START + 37) == 1 then
-		-- Read BLOCK: 1 bytes
-		local BLOCK_START = Read(1)
-		Value.OverlapFilterType = buffer.readu8(RecieveBuffer, BLOCK_START + 0)
-		if Value.OverlapFilterType < 0 then error(`Expected "Value.OverlapFilterType" to be larger than 0, got {Value.OverlapFilterType} instead.`) end
-		if Value.OverlapFilterType > 1 then error(`Expected "Value.OverlapFilterType" to be smaller than 1, got {Value.OverlapFilterType} instead.`) end
-	end
-	if buffer.readu8(RecieveBuffer, BLOCK_START + 38) == 1 then
 		-- Read BLOCK: 2 bytes
 		local BLOCK_START = Read(2)
 		-- START ARRAY
 		local Length = buffer.readu16(RecieveBuffer, BLOCK_START + 0)
 		if Length < 0 then error(`Expected "Length" to be larger than 0, got {Length} instead.`) end
 		if Length > 65535 then error(`Expected "Length" to be smaller than 65535, got {Length} instead.`) end
-		Value.OverlapFilterDescendants = table.create(Length)
+		Value.FilterTagged = table.create(Length)
+			-- Read BLOCK: 2 bytes
+		local ARRAY_START_2 = Read(2 * Length)
 		for Index = 1, Length do
-			RecieveInstanceCursor += 1
-			local Item_2 = RecieveInstances[RecieveInstanceCursor]
-			if typeof(Item_2) ~= "Instance" then error(`Expected an Instance, got {typeof(Item_2)} instead.`) end
-			if not Item_2:IsA("Instance") then error(`Expected an Instance of type "Instance", got "{Item_2.ClassName}" instead.`) end
-			table.insert(Value.OverlapFilterDescendants, Item_2)
+			-- Read 2
+			local OPERATION_OFFSET_0 = ARRAY_START_2
+			ARRAY_START_2 += 2
+			Length = buffer.readu16(RecieveBuffer, OPERATION_OFFSET_0)
+			local Item_2 = buffer.readstring(RecieveBuffer, Read(Length), Length)
+			table.insert(Value.FilterTagged, Item_2)
 		end
 		-- END ARRAY
 	end
-	if buffer.readu8(RecieveBuffer, BLOCK_START + 39) == 1 then
+	if buffer.readu8(RecieveBuffer, BLOCK_START + 38) == 1 then
 		-- Read BLOCK: 4 bytes
 		local BLOCK_START = Read(4)
 		Value.GridSize = buffer.readf32(RecieveBuffer, BLOCK_START + 0)
 	end
-	if buffer.readu8(RecieveBuffer, BLOCK_START + 40) == 1 then
+	if buffer.readu8(RecieveBuffer, BLOCK_START + 39) == 1 then
 		-- Read BLOCK: 4 bytes
 		local BLOCK_START = Read(4)
 		Value.CleanupDelay = buffer.readf32(RecieveBuffer, BLOCK_START + 0)
 	end
-	if buffer.readu8(RecieveBuffer, BLOCK_START + 41) == 1 then
+	if buffer.readu8(RecieveBuffer, BLOCK_START + 40) == 1 then
 		-- Read BLOCK: 1 bytes
 		local BLOCK_START = Read(1)
 		Value.SkipEncapsulatedVoxels = (buffer.readu8(RecieveBuffer, BLOCK_START + 0) == 1)
 	end
-	local Length = buffer.readu16(RecieveBuffer, BLOCK_START + 42)
+	local Length = buffer.readu16(RecieveBuffer, BLOCK_START + 41)
 	Value.ID = buffer.readstring(RecieveBuffer, Read(Length), Length)
-	if buffer.readu8(RecieveBuffer, BLOCK_START + 44) == 1 then
+	if buffer.readu8(RecieveBuffer, BLOCK_START + 43) == 1 then
 		-- Read BLOCK: 2 bytes
 		local BLOCK_START = Read(2)
 		Length = buffer.readu16(RecieveBuffer, BLOCK_START + 0)
 		Value.OnVoxelDestruct = buffer.readstring(RecieveBuffer, Read(Length), Length)
 	end
 	-- START ARRAY
-	Length = buffer.readu16(RecieveBuffer, BLOCK_START + 45)
+	Length = buffer.readu16(RecieveBuffer, BLOCK_START + 44)
 	if Length < 0 then error(`Expected "Length" to be larger than 0, got {Length} instead.`) end
 	if Length > 65535 then error(`Expected "Length" to be smaller than 65535, got {Length} instead.`) end
 	Value.DestructParameters = table.create(Length)
@@ -438,7 +434,7 @@ local function Shatterbox_ReadEVENT_DestroyPuppet(): (string)
 	return Value
 end
 
-local function Shatterbox_ReadEVENT_ReplicateMap(): ({ { CFrame: CFrame, Size: Vector3, Color: Color3, Material: number, Transparency: number, GridSize: number? } })
+local function Shatterbox_ReadEVENT_ReplicateMap(): ({ { CFrame: CFrame, Size: Vector3, Color: Color3, Material: number, Transparency: number, GridSize: number?, Tags: { string } } })
 	-- Read BLOCK: 2 bytes
 	local BLOCK_START = Read(2)
 	-- START ARRAY
@@ -446,8 +442,8 @@ local function Shatterbox_ReadEVENT_ReplicateMap(): ({ { CFrame: CFrame, Size: V
 	if Length < 0 then error(`Expected "Length" to be larger than 0, got {Length} instead.`) end
 	if Length > 65535 then error(`Expected "Length" to be smaller than 65535, got {Length} instead.`) end
 	local Value = table.create(Length)
-		-- Read BLOCK: 44 bytes
-	local ARRAY_START_1 = Read(44 * Length)
+		-- Read BLOCK: 46 bytes
+	local ARRAY_START_1 = Read(46 * Length)
 	for Index = 1, Length do
 		local Item_1 = {} :: any
 		-- Read 4
@@ -563,6 +559,25 @@ local function Shatterbox_ReadEVENT_ReplicateMap(): ({ { CFrame: CFrame, Size: V
 				Item_1.GridSize = if Encoded // 0x8000 == 1 then -Result else Result
 			end
 		end
+		-- START ARRAY
+		-- Read 2
+		local OPERATION_OFFSET_15 = ARRAY_START_1
+		ARRAY_START_1 += 2
+		Length = buffer.readu16(RecieveBuffer, OPERATION_OFFSET_15)
+		if Length < 0 then error(`Expected "Length" to be larger than 0, got {Length} instead.`) end
+		if Length > 65535 then error(`Expected "Length" to be smaller than 65535, got {Length} instead.`) end
+		Item_1.Tags = table.create(Length)
+			-- Read BLOCK: 2 bytes
+		local ARRAY_START_2 = Read(2 * Length)
+		for Index = 1, Length do
+			-- Read 2
+			local OPERATION_OFFSET_0 = ARRAY_START_2
+			ARRAY_START_2 += 2
+			Length = buffer.readu16(RecieveBuffer, OPERATION_OFFSET_0)
+			local Item_2 = buffer.readstring(RecieveBuffer, Read(Length), Length)
+			table.insert(Item_1.Tags, Item_2)
+		end
+		-- END ARRAY
 		table.insert(Value, Item_1)
 	end
 	-- END ARRAY
@@ -639,7 +654,7 @@ Reliable.OnClientEvent:Connect(function(Buffer: buffer, Instances: {Instance})
 		local BLOCK_START = Read(1)
 		local Index = buffer.readu8(RecieveBuffer, BLOCK_START + 0)
 		if Index == 0 then
-			local Value: { Shape: number, CFrame: CFrame, Size: Vector3, OverlapFilterType: number?, OverlapFilterDescendants: { Instance }?, GridSize: number?, CleanupDelay: number?, SkipEncapsulatedVoxels: boolean?, ID: string, OnVoxelDestruct: string?, DestructParameters: { any } } = Shatterbox_ReadEVENT_SignalDestruction()
+			local Value: { Shape: number, CFrame: CFrame, Size: Vector3, FilterTagged: { string }?, GridSize: number?, CleanupDelay: number?, SkipEncapsulatedVoxels: boolean?, ID: string, OnVoxelDestruct: string?, DestructParameters: { any } } = Shatterbox_ReadEVENT_SignalDestruction()
 			if #Events.Reliable[0] > 0 then
 				for _, Listener in Events.Reliable[0] do
 					task.spawn(Listener, Value)
@@ -723,7 +738,7 @@ Reliable.OnClientEvent:Connect(function(Buffer: buffer, Instances: {Instance})
 				table.insert(Queue.Reliable[7], {Value} :: {any})
 			end
 		elseif Index == 8 then
-			local Value: { { CFrame: CFrame, Size: Vector3, Color: Color3, Material: number, Transparency: number, GridSize: number? } } = Shatterbox_ReadEVENT_ReplicateMap()
+			local Value: { { CFrame: CFrame, Size: Vector3, Color: Color3, Material: number, Transparency: number, GridSize: number?, Tags: { string } } } = Shatterbox_ReadEVENT_ReplicateMap()
 			if #Events.Reliable[8] > 0 then
 				for _, Listener in Events.Reliable[8] do
 					task.spawn(Listener, Value)
@@ -756,7 +771,7 @@ local Returns = table.freeze({
 
 	Shatterbox = {
 		SignalDestruction = {
-			On = function(Listener: (Value: { Shape: number, CFrame: CFrame, Size: Vector3, OverlapFilterType: number?, OverlapFilterDescendants: { Instance }?, GridSize: number?, CleanupDelay: number?, SkipEncapsulatedVoxels: boolean?, ID: string, OnVoxelDestruct: string?, DestructParameters: { any } }) -> ()): () -> ()
+			On = function(Listener: (Value: { Shape: number, CFrame: CFrame, Size: Vector3, FilterTagged: { string }?, GridSize: number?, CleanupDelay: number?, SkipEncapsulatedVoxels: boolean?, ID: string, OnVoxelDestruct: string?, DestructParameters: { any } }) -> ()): () -> ()
 				table.insert(Events.Reliable[0], Listener)
 				for Index, Arguments in Queue.Reliable[0] do
 					task.spawn(Listener, table.unpack(Arguments))
@@ -866,7 +881,7 @@ local Returns = table.freeze({
 			end
 		},
 		ReplicateMap = {
-			On = function(Listener: (Value: { { CFrame: CFrame, Size: Vector3, Color: Color3, Material: number, Transparency: number, GridSize: number? } }) -> ()): () -> ()
+			On = function(Listener: (Value: { { CFrame: CFrame, Size: Vector3, Color: Color3, Material: number, Transparency: number, GridSize: number?, Tags: { string } } }) -> ()): () -> ()
 				table.insert(Events.Reliable[8], Listener)
 				for Index, Arguments in Queue.Reliable[8] do
 					task.spawn(Listener, table.unpack(Arguments))

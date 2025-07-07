@@ -13,7 +13,8 @@ struct PartInstance {
 	Color : Color3,
 	Material : u16(256..2311),
 	Transparency : f16,
-	GridSize : f16?
+	GridSize : f16?,
+	Tags : string[]
 }
 
 struct DestructionParamsType {
@@ -21,8 +22,7 @@ struct DestructionParamsType {
 	CFrame : CFrame,
 	Size : vector,
 	
-	OverlapFilterType : u8(0..1)?,
-	OverlapFilterDescendants : Instance[]?,
+	FilterTagged : string[]?,
 	GridSize : f32?,
 	CleanupDelay : f32?,
 	SkipEncapsulatedVoxels : boolean?,
@@ -32,7 +32,7 @@ struct DestructionParamsType {
 	DestructParameters : unknown[]
 }
 
-struct PuppetState { 
+struct PuppetState {
 	GUID : string,
 	CFrame : CFrame 
 }

@@ -153,12 +153,12 @@ local Queue: any = {
 
 Queue.Reliable[4] = table.create(256)
 export type Shatterbox_Puppet = { GUID: string, CFrame: CFrame, Size: Vector3, Color: Color3, Material: number, Transparency: number }
-export type Shatterbox_PartInstance = { CFrame: CFrame, Size: Vector3, Color: Color3, Material: number, Transparency: number, GridSize: number? }
-export type Shatterbox_DestructionParamsType = { Shape: number, CFrame: CFrame, Size: Vector3, OverlapFilterType: number?, OverlapFilterDescendants: { Instance }?, GridSize: number?, CleanupDelay: number?, SkipEncapsulatedVoxels: boolean?, ID: string, OnVoxelDestruct: string?, DestructParameters: { any } }
+export type Shatterbox_PartInstance = { CFrame: CFrame, Size: Vector3, Color: Color3, Material: number, Transparency: number, GridSize: number?, Tags: { string } }
+export type Shatterbox_DestructionParamsType = { Shape: number, CFrame: CFrame, Size: Vector3, FilterTagged: { string }?, GridSize: number?, CleanupDelay: number?, SkipEncapsulatedVoxels: boolean?, ID: string, OnVoxelDestruct: string?, DestructParameters: { any } }
 export type Shatterbox_PuppetState = { GUID: string, CFrame: CFrame }
-local function Shatterbox_WriteEVENT_SignalDestruction(Value: { Shape: number, CFrame: CFrame, Size: Vector3, OverlapFilterType: number?, OverlapFilterDescendants: { Instance }?, GridSize: number?, CleanupDelay: number?, SkipEncapsulatedVoxels: boolean?, ID: string, OnVoxelDestruct: string?, DestructParameters: { any } }): ()
-	-- Allocate BLOCK: 48 bytes
-	local BLOCK_START = Allocate(48)
+local function Shatterbox_WriteEVENT_SignalDestruction(Value: { Shape: number, CFrame: CFrame, Size: Vector3, FilterTagged: { string }?, GridSize: number?, CleanupDelay: number?, SkipEncapsulatedVoxels: boolean?, ID: string, OnVoxelDestruct: string?, DestructParameters: { any } }): ()
+	-- Allocate BLOCK: 47 bytes
+	local BLOCK_START = Allocate(47)
 	buffer.writeu8(SendBuffer, BLOCK_START + 0, 0)
 	buffer.writeu8(SendBuffer, BLOCK_START + 1, Value.Shape)
 	local Vector = Value.CFrame.Position
@@ -173,47 +173,49 @@ local function Shatterbox_WriteEVENT_SignalDestruction(Value: { Shape: number, C
 	buffer.writef32(SendBuffer, BLOCK_START + 26, Vector.X)
 	buffer.writef32(SendBuffer, BLOCK_START + 30, Vector.Y)
 	buffer.writef32(SendBuffer, BLOCK_START + 34, Vector.Z)
-	buffer.writeu8(SendBuffer, BLOCK_START + 38, Value.OverlapFilterType ~= nil and 1 or 0)
-	if Value.OverlapFilterType ~= nil then
-		-- Allocate BLOCK: 1 bytes
-		local BLOCK_START = Allocate(1)
-		buffer.writeu8(SendBuffer, BLOCK_START + 0, Value.OverlapFilterType)
-	end
-	buffer.writeu8(SendBuffer, BLOCK_START + 39, Value.OverlapFilterDescendants ~= nil and 1 or 0)
-	if Value.OverlapFilterDescendants ~= nil then
+	buffer.writeu8(SendBuffer, BLOCK_START + 38, Value.FilterTagged ~= nil and 1 or 0)
+	if Value.FilterTagged ~= nil then
 		-- Allocate BLOCK: 2 bytes
 		local BLOCK_START = Allocate(2)
 		-- START ARRAY
-		buffer.writeu16(SendBuffer, BLOCK_START + 0, #Value.OverlapFilterDescendants)
-		for Index = 1, #Value.OverlapFilterDescendants do
-			local Item_2 = Value.OverlapFilterDescendants[Index]
-			table.insert(SendInstances, Item_2 or Null)
+		buffer.writeu16(SendBuffer, BLOCK_START + 0, #Value.FilterTagged)
+			-- Allocate BLOCK: 2 bytes
+		local ARRAY_START_2 = Allocate(2 * #Value.FilterTagged)
+		for Index = 1, #Value.FilterTagged do
+			local Item_2 = Value.FilterTagged[Index]
+			local Length = #Item_2
+			-- Allocate 2
+			local OPERATION_OFFSET_0 = ARRAY_START_2
+			ARRAY_START_2 += 2
+			buffer.writeu16(SendBuffer, OPERATION_OFFSET_0, Length)
+			Allocate(Length)
+			buffer.writestring(SendBuffer, SendOffset, Item_2, Length)
 		end
 		-- END ARRAY
 	end
-	buffer.writeu8(SendBuffer, BLOCK_START + 40, Value.GridSize ~= nil and 1 or 0)
+	buffer.writeu8(SendBuffer, BLOCK_START + 39, Value.GridSize ~= nil and 1 or 0)
 	if Value.GridSize ~= nil then
 		-- Allocate BLOCK: 4 bytes
 		local BLOCK_START = Allocate(4)
 		buffer.writef32(SendBuffer, BLOCK_START + 0, Value.GridSize)
 	end
-	buffer.writeu8(SendBuffer, BLOCK_START + 41, Value.CleanupDelay ~= nil and 1 or 0)
+	buffer.writeu8(SendBuffer, BLOCK_START + 40, Value.CleanupDelay ~= nil and 1 or 0)
 	if Value.CleanupDelay ~= nil then
 		-- Allocate BLOCK: 4 bytes
 		local BLOCK_START = Allocate(4)
 		buffer.writef32(SendBuffer, BLOCK_START + 0, Value.CleanupDelay)
 	end
-	buffer.writeu8(SendBuffer, BLOCK_START + 42, Value.SkipEncapsulatedVoxels ~= nil and 1 or 0)
+	buffer.writeu8(SendBuffer, BLOCK_START + 41, Value.SkipEncapsulatedVoxels ~= nil and 1 or 0)
 	if Value.SkipEncapsulatedVoxels ~= nil then
 		-- Allocate BLOCK: 1 bytes
 		local BLOCK_START = Allocate(1)
 		buffer.writeu8(SendBuffer, BLOCK_START + 0, Value.SkipEncapsulatedVoxels and 1 or 0)
 	end
 	local Length = #Value.ID
-	buffer.writeu16(SendBuffer, BLOCK_START + 43, Length)
+	buffer.writeu16(SendBuffer, BLOCK_START + 42, Length)
 	Allocate(Length)
 	buffer.writestring(SendBuffer, SendOffset, Value.ID, Length)
-	buffer.writeu8(SendBuffer, BLOCK_START + 45, Value.OnVoxelDestruct ~= nil and 1 or 0)
+	buffer.writeu8(SendBuffer, BLOCK_START + 44, Value.OnVoxelDestruct ~= nil and 1 or 0)
 	if Value.OnVoxelDestruct ~= nil then
 		-- Allocate BLOCK: 2 bytes
 		local BLOCK_START = Allocate(2)
@@ -223,7 +225,7 @@ local function Shatterbox_WriteEVENT_SignalDestruction(Value: { Shape: number, C
 		buffer.writestring(SendBuffer, SendOffset, Value.OnVoxelDestruct, Length)
 	end
 	-- START ARRAY
-	buffer.writeu16(SendBuffer, BLOCK_START + 46, #Value.DestructParameters)
+	buffer.writeu16(SendBuffer, BLOCK_START + 45, #Value.DestructParameters)
 	for Index = 1, #Value.DestructParameters do
 		local Item_1 = Value.DestructParameters[Index]
 		table.insert(SendInstances, if Item_1 == nil then Null else Item_1)
@@ -421,14 +423,14 @@ local function Shatterbox_WriteEVENT_DestroyPuppet(Value: string): ()
 	buffer.writestring(SendBuffer, SendOffset, Value, Length)
 end
 
-local function Shatterbox_WriteEVENT_ReplicateMap(Value: { { CFrame: CFrame, Size: Vector3, Color: Color3, Material: number, Transparency: number, GridSize: number? } }): ()
+local function Shatterbox_WriteEVENT_ReplicateMap(Value: { { CFrame: CFrame, Size: Vector3, Color: Color3, Material: number, Transparency: number, GridSize: number?, Tags: { string } } }): ()
 	-- Allocate BLOCK: 3 bytes
 	local BLOCK_START = Allocate(3)
 	buffer.writeu8(SendBuffer, BLOCK_START + 0, 8)
 	-- START ARRAY
 	buffer.writeu16(SendBuffer, BLOCK_START + 1, #Value)
-		-- Allocate BLOCK: 44 bytes
-	local ARRAY_START_1 = Allocate(44 * #Value)
+		-- Allocate BLOCK: 46 bytes
+	local ARRAY_START_1 = Allocate(46 * #Value)
 	for Index = 1, #Value do
 		local Item_1 = Value[Index]
 		local Vector = Item_1.CFrame.Position
@@ -544,6 +546,24 @@ local function Shatterbox_WriteEVENT_ReplicateMap(Value: { { CFrame: CFrame, Siz
 				buffer.writeu16(SendBuffer, BLOCK_START + 0, Result)
 			end
 		end
+		-- START ARRAY
+		-- Allocate 2
+		local OPERATION_OFFSET_15 = ARRAY_START_1
+		ARRAY_START_1 += 2
+		buffer.writeu16(SendBuffer, OPERATION_OFFSET_15, #Item_1.Tags)
+			-- Allocate BLOCK: 2 bytes
+		local ARRAY_START_2 = Allocate(2 * #Item_1.Tags)
+		for Index = 1, #Item_1.Tags do
+			local Item_2 = Item_1.Tags[Index]
+			local Length = #Item_2
+			-- Allocate 2
+			local OPERATION_OFFSET_0 = ARRAY_START_2
+			ARRAY_START_2 += 2
+			buffer.writeu16(SendBuffer, OPERATION_OFFSET_0, Length)
+			Allocate(Length)
+			buffer.writestring(SendBuffer, SendOffset, Item_2, Length)
+		end
+		-- END ARRAY
 	end
 	-- END ARRAY
 end
@@ -693,12 +713,12 @@ local Returns = table.freeze({
 
 	Shatterbox = {
 		SignalDestruction = {
-			Fire = function(Player: Player, Value: { Shape: number, CFrame: CFrame, Size: Vector3, OverlapFilterType: number?, OverlapFilterDescendants: { Instance }?, GridSize: number?, CleanupDelay: number?, SkipEncapsulatedVoxels: boolean?, ID: string, OnVoxelDestruct: string?, DestructParameters: { any } }): ()
+			Fire = function(Player: Player, Value: { Shape: number, CFrame: CFrame, Size: Vector3, FilterTagged: { string }?, GridSize: number?, CleanupDelay: number?, SkipEncapsulatedVoxels: boolean?, ID: string, OnVoxelDestruct: string?, DestructParameters: { any } }): ()
 				Load(PlayersMap[Player])
 				Shatterbox_WriteEVENT_SignalDestruction(Value)
 				PlayersMap[Player] = Save()
 			end,
-			FireAll = function(Value: { Shape: number, CFrame: CFrame, Size: Vector3, OverlapFilterType: number?, OverlapFilterDescendants: { Instance }?, GridSize: number?, CleanupDelay: number?, SkipEncapsulatedVoxels: boolean?, ID: string, OnVoxelDestruct: string?, DestructParameters: { any } }): ()
+			FireAll = function(Value: { Shape: number, CFrame: CFrame, Size: Vector3, FilterTagged: { string }?, GridSize: number?, CleanupDelay: number?, SkipEncapsulatedVoxels: boolean?, ID: string, OnVoxelDestruct: string?, DestructParameters: { any } }): ()
 				Load()
 				Shatterbox_WriteEVENT_SignalDestruction(Value)
 				local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
@@ -710,7 +730,7 @@ local Returns = table.freeze({
 					PlayersMap[Player] = Save()
 				end
 			end,
-			FireList = function(List: {Player}, Value: { Shape: number, CFrame: CFrame, Size: Vector3, OverlapFilterType: number?, OverlapFilterDescendants: { Instance }?, GridSize: number?, CleanupDelay: number?, SkipEncapsulatedVoxels: boolean?, ID: string, OnVoxelDestruct: string?, DestructParameters: { any } }): ()
+			FireList = function(List: {Player}, Value: { Shape: number, CFrame: CFrame, Size: Vector3, FilterTagged: { string }?, GridSize: number?, CleanupDelay: number?, SkipEncapsulatedVoxels: boolean?, ID: string, OnVoxelDestruct: string?, DestructParameters: { any } }): ()
 				Load()
 				Shatterbox_WriteEVENT_SignalDestruction(Value)
 				local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
@@ -722,7 +742,7 @@ local Returns = table.freeze({
 					PlayersMap[Player] = Save()
 				end
 			end,
-			FireExcept = function(Except: Player, Value: { Shape: number, CFrame: CFrame, Size: Vector3, OverlapFilterType: number?, OverlapFilterDescendants: { Instance }?, GridSize: number?, CleanupDelay: number?, SkipEncapsulatedVoxels: boolean?, ID: string, OnVoxelDestruct: string?, DestructParameters: { any } }): ()
+			FireExcept = function(Except: Player, Value: { Shape: number, CFrame: CFrame, Size: Vector3, FilterTagged: { string }?, GridSize: number?, CleanupDelay: number?, SkipEncapsulatedVoxels: boolean?, ID: string, OnVoxelDestruct: string?, DestructParameters: { any } }): ()
 				Load()
 				Shatterbox_WriteEVENT_SignalDestruction(Value)
 				local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
@@ -1029,12 +1049,12 @@ local Returns = table.freeze({
 			end,
 		},
 		ReplicateMap = {
-			Fire = function(Player: Player, Value: { { CFrame: CFrame, Size: Vector3, Color: Color3, Material: number, Transparency: number, GridSize: number? } }): ()
+			Fire = function(Player: Player, Value: { { CFrame: CFrame, Size: Vector3, Color: Color3, Material: number, Transparency: number, GridSize: number?, Tags: { string } } }): ()
 				Load(PlayersMap[Player])
 				Shatterbox_WriteEVENT_ReplicateMap(Value)
 				PlayersMap[Player] = Save()
 			end,
-			FireAll = function(Value: { { CFrame: CFrame, Size: Vector3, Color: Color3, Material: number, Transparency: number, GridSize: number? } }): ()
+			FireAll = function(Value: { { CFrame: CFrame, Size: Vector3, Color: Color3, Material: number, Transparency: number, GridSize: number?, Tags: { string } } }): ()
 				Load()
 				Shatterbox_WriteEVENT_ReplicateMap(Value)
 				local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
@@ -1046,7 +1066,7 @@ local Returns = table.freeze({
 					PlayersMap[Player] = Save()
 				end
 			end,
-			FireList = function(List: {Player}, Value: { { CFrame: CFrame, Size: Vector3, Color: Color3, Material: number, Transparency: number, GridSize: number? } }): ()
+			FireList = function(List: {Player}, Value: { { CFrame: CFrame, Size: Vector3, Color: Color3, Material: number, Transparency: number, GridSize: number?, Tags: { string } } }): ()
 				Load()
 				Shatterbox_WriteEVENT_ReplicateMap(Value)
 				local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
@@ -1058,7 +1078,7 @@ local Returns = table.freeze({
 					PlayersMap[Player] = Save()
 				end
 			end,
-			FireExcept = function(Except: Player, Value: { { CFrame: CFrame, Size: Vector3, Color: Color3, Material: number, Transparency: number, GridSize: number? } }): ()
+			FireExcept = function(Except: Player, Value: { { CFrame: CFrame, Size: Vector3, Color: Color3, Material: number, Transparency: number, GridSize: number?, Tags: { string } } }): ()
 				Load()
 				Shatterbox_WriteEVENT_ReplicateMap(Value)
 				local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances

@@ -2,7 +2,7 @@
 --!optimize 2
 
 
--- Shatterbox release 7.3
+-- Shatterbox release 7.4
 
 
 --#selene: allow(multiple_statements)
@@ -75,7 +75,7 @@ local Settings = {}
 
 Settings.UseSmoothCleanup = true
 
-Settings.MaxDivisionsPerFrame = 200
+Settings.MaxDivisionsPerFrame = 100
 
 Settings.DefaultSmoothCleanupDelay = 60
 
@@ -85,13 +85,13 @@ Settings.UsePriorityQueue = true
 
 Settings.PrioritizeRecentN = 10
 
-Settings.PuppetReplicationFrequency = 20
+Settings.PuppetReplicationFrequency = 10 -- 10 fps/Hz target replication frequency
 
 Settings.ClientTweenPuppets = true
 
 Settings.PuppetReplicationFrameLimit = 10
 
-Settings.PuppetSleepVelocity = 0.01
+Settings.PuppetSleepVelocity = 0.001
 
 Settings.SkipInstanceCheck = function(i : Instance)
 
@@ -125,43 +125,11 @@ local function ShouldSkipInstance(i : Instance)
 end
 
 
---[[ How to use:
-
-	Place Shatterbox anywhere as a descendant of ReplicatedStorage (or in the "shared" directory if you are using Rojo)
-
-	Require the module on ONLY the server side.
-
-	This library assumes STATIC objects (i.e, buildings, the ground, walls). Not yet fully supporting moving objects.
-
-	Giving a part the GridSize attribute will override the default GridSize.
-	| the GridSize passed to destruction functions will override this attribute.
-
-	To create your own debris effects, use Shatterbox.RegisterOnVoxelDestruct(name, func)
-	| if you need one effect to do different things on server side and client side
-	| you have to register it in this scipt using the local function RegisterOnVoxelDestruct(name, clientFunc, serverFunc)
-	| see below (around line 120) for an example.
-
-	Using a debris effect requires you to set OnVoxelDestruct = name
-
-	CreateHitbox() will create a hitbox object very similar to a VoxBreaker Hitbox.
-	I suggest you use this to get a feel for the module, it is very user-friendly.
-
-	OnVoxelDestruct parameters explained (anything past the 3rd is supplied via DestructParams, examples are above):
-
-		- voxel is the part that is to be destroyed
-
-		- dirtyParent is the source model which is affected by smooth cleanup. See "Rough" for an example on the usage.
-
-		- cuttingPart is the cloned hitbox which destroyed "voxel" in the state that it was in when it queued the operation. See "Rough" for an example on the usage.
-
-		- isEdge is true if the voxel is along the edge of the intersection.
-
-		- any parameters past isEdge are defined by the DestructParams array.
-]]
-
-
 
 -- If you modify any code below here, you are at serious risk of breaking the module. It probably already has a way to do what you need to do.
+
+
+
 
 
 
@@ -210,9 +178,6 @@ if isClient then
 	clientMapFolder = Instance.new("Folder")
 	clientMapFolder.Parent = workspace
 	clientMapFolder.Name = "ClientMap"
-
-	defaultOverlapParams.FilterType = Enum.RaycastFilterType.Include
-	defaultOverlapParams.FilterDescendantsInstances = { clientMapFolder }
 end
 
 
@@ -234,6 +199,7 @@ end
 
 
 local VertexMath = require(lib:WaitForChild("VertexMath"))
+local TaggedArray = require(script.Parent:WaitForChild("util"):WaitForChild("TaggedArray"))
 local PartEncapsulatesBlockPart = VertexMath.PartEncapsulatesBlockPart
 local GetBlockPartVertices = VertexMath.GetBlockPartVertices
 local PartContainsAVert, PartContainsAllVerts = VertexMath.PartContainsAVert, VertexMath.PartContainsAllVerts
@@ -279,6 +245,29 @@ local function FindDirtyOp(intersectingPart : Part)
 		if intersectingPart == intersectedDirties.intersectingPart then return intersectedDirties.dirtied end
 	end
 	return nil
+end
+
+-- returns OverlapParams including all instances with the given tags.
+local function OverlapParamsOfTagged(tags : { string }) : OverlapParams
+	local arr = {}
+
+	if #tags == 1 then
+		arr = TaggedArray(tags[1])
+	else
+		for _, tag in ipairs(tags) do
+			local taggedArray = TaggedArray(tag)
+			for _, taggedInstance in ipairs(taggedArray) do
+				if table.find(arr, taggedInstance) then continue end
+				table.insert(arr, taggedInstance)
+			end
+		end
+	end
+
+	local overlapParams = OverlapParams.new()
+	overlapParams.FilterType = Enum.RaycastFilterType.Include
+	overlapParams.FilterDescendantsInstances = arr
+
+	return overlapParams
 end
 
 
@@ -410,9 +399,11 @@ local function HandleVoxelDestruction(callbackName : string?, voxel : Part, dirt
 end
 
 
-local function GetDestructibleParts(cuttingPart, overlapParams, doNotReparent)
+local function GetDestructibleParts(cuttingPart, filterTagged, doNotReparent)
 	local dirtied = {}
 	local partsInPart = {}
+
+	local overlapParams = filterTagged and OverlapParamsOfTagged(filterTagged) or defaultOverlapParams
 
 	local op = cuttingPart.Parent
 	cuttingPart.Parent = tmpFolder
@@ -444,7 +435,7 @@ local function PopShatterQueue()
 
 		shatterPart, partsInPart = v.CuttingPart, {}
 
-		for _, part in ipairs( GetDestructibleParts(shatterPart, v.OverlapParams) ) do
+		for _, part in ipairs( GetDestructibleParts(shatterPart, v.FilterTagged) ) do
 
 			if part:HasTag("ShatterboxDebris") then
 				HandleVoxelDestruction(v.OnVoxelDestruct, part, part.Parent, shatterPart, false, unpack(v.DestructParameters))
@@ -541,9 +532,7 @@ local function InsertToShatterQueue(params : Types.DestructionParams)
 
 	local intersectingPart = params.CuttingPart
 
-	if #GetDestructibleParts(intersectingPart, params.OverlapParams) == 0 then return end
-
-	if isClient then params.OverlapParams = defaultOverlapParams end
+	if #GetDestructibleParts(intersectingPart, params.FilterTagged) == 0 then return end
 
 	table.insert(ShatterQueue, params)
 end
@@ -554,7 +543,7 @@ local function ImaginaryVoxels(params)
 
 	local voxels = {} :: {Types.ImaginaryVoxel}
 
-	local partsInPart, destructibleParts = {}, GetDestructibleParts(params.CuttingPart, params.OverlapParams, true)
+	local partsInPart, destructibleParts = {}, GetDestructibleParts(params.CuttingPart, params.FilterTagged, true)
 	for _, part in ipairs(destructibleParts) do
 		table.insert(partsInPart, {
 			CFrame = part.CFrame,
@@ -666,7 +655,7 @@ end
 
 
 
-local function ValidateDestructionParams(intersectingPart : Part | Model | Types.DestructionParams, overlapParams : OverlapParams?, CleanupDelay : number?, OnVoxelDestruct : string?, GridSize : number?, SkipEncapsulatedVoxels : boolean?, OnDestructCompleted : (() -> ())?, ... : any)
+local function ValidateDestructionParams(intersectingPart : Part | Model | Types.DestructionParams, FilterTagged : (string | {string})?, CleanupDelay : number?, OnVoxelDestruct : string?, GridSize : number?, SkipEncapsulatedVoxels : boolean?, OnDestructCompleted : (() -> ())?, ... : any)
 	local isTbl = typeof(intersectingPart) == "table"
 
 	local cuttingPart
@@ -704,7 +693,11 @@ local function ValidateDestructionParams(intersectingPart : Part | Model | Types
 		params.CuttingPart = cuttingPart
 	end
 
-			params.OverlapParams = iP.OverlapParams 		   or overlapParams 		     or defaultOverlapParams
+	local filterTagged = iP.FilterTagged or FilterTagged
+	if typeof(filterTagged) == "string" then filterTagged = { filterTagged } end
+
+
+			params.FilterTagged = filterTagged
 			  params.CleanupDelay = iP.CleanupDelay			   or CleanupDelay   		     or Settings.DefaultSmoothCleanupDelay
 		    params.OnVoxelDestruct = iP.OnVoxelDestruct 		   or OnVoxelDestruct
 				    params.GridSize = iP.GridSize 				   or GridSize
@@ -790,12 +783,6 @@ local function ReplicateDestructionFromServer(params, skipEvent)
 		return
 	end
 
-	local overlapParams = OverlapParams.new()
-	overlapParams.FilterType = Enum.RaycastFilterType:FromValue(params.OverlapFilterType)
-	overlapParams.FilterDescendantsInstances = params.OverlapFilterDescendants
-
-	dParams.OverlapParams = overlapParams
-
 	local ID = dParams.ID
 	opDirties[ID] = {
 		intersectingPart = dParams.CuttingPart,
@@ -808,19 +795,12 @@ local function ReplicateDestructionFromServer(params, skipEvent)
 end
 
 
-local function ReplicateDestructionToClients(destructionParams : Types.DestructionParams, finalOpTick : number)
+local function ReplicateDestructionToClients(destructionParams : Types.DestructionParams)
 
 	destructionParams = table.clone(destructionParams)
 	destructionParams.Shape = destructionParams.Shape.Value
 	destructionParams.OnDestructCompleted = nil
 
-	destructionParams.finalOpTick = finalOpTick
-
-	local overlapParams = destructionParams.OverlapParams
-	destructionParams.OverlapFilterType = overlapParams.FilterType.Value
-	destructionParams.OverlapFilterDescendants= overlapParams.FilterDescendantsInstances
-
-	destructionParams.OverlapParams = nil
 	destructionParams.CuttingPart = nil
 
 	local ID = destructionParams.ID
@@ -886,7 +866,8 @@ local function ReplicateMapToNewPlayer(plr)
 			Color = child.Color,
 			Material = child.Material.Value,
 			Transparency = child.Transparency,
-			GridSize = child:GetAttribute("GridSize")
+			GridSize = child:GetAttribute("GridSize"),
+			Tags = child:GetTags()
 		})
 	end
 	for _, opDirty in pairs(opDirties) do
@@ -898,7 +879,8 @@ local function ReplicateMapToNewPlayer(plr)
 				Color = p.Color,
 				Material = p.Material.Value,
 				Transparency = p.Transparency,
-				GridSize = p:GetAttribute("GridSize")
+				GridSize = p:GetAttribute("GridSize"),
+				Tags = p:GetTags()
 			})
 		end
 	end
@@ -919,6 +901,7 @@ local function ReplicateMapFromServer(MapParts)
 		Part.Transparency = mapPart.Transparency
 		Part.Parent = clientMapFolder
 		Part:SetAttribute("GridSize", mapPart.GridSize)
+		for _, tag in ipairs(mapPart.Tags) do Part:AddTag(tag) end
 	end
 end
 
@@ -998,8 +981,10 @@ end
 
 
 
--- Performs voxel destruction around the 'intersectingPart' according to the OverlapParams supplied.
-function Shatterbox.Destroy(intersectingPart : Part | Model | Types.DestructionParams, overlapParams : OverlapParams?, CleanupDelay : number?, OnVoxelDestruct : string?, GridSize : number?, SkipEncapsulatedVoxels : boolean?, OnDestructCompleted : (() -> ())?, ... : any)
+-- Performs voxel destruction around the 'intersectingPart' according to the FilterTagged supplied.
+--
+-- if no FilterTagged is given, everything except IndestructibleTag tagged Block parts are considered for destruction.
+function Shatterbox.Destroy(intersectingPart : Part | Model | Types.DestructionParams, FilterTagged : (string | {string})?, CleanupDelay : number?, OnVoxelDestruct : string?, GridSize : number?, SkipEncapsulatedVoxels : boolean?, OnDestructCompleted : (() -> ())?, ... : any)
 	assert(isServer, "You can only use Destroy on the server-side in this release.")
 
 	local isPart, isModel, isTbl = false, false, typeof(intersectingPart) == "table"
@@ -1009,7 +994,7 @@ function Shatterbox.Destroy(intersectingPart : Part | Model | Types.DestructionP
 	assert(isPart or isModel or isTbl, "The input parameter to the destruction function must be a Part, Model, or a Table")
 	assert(not isTbl or (intersectingPart.CuttingPart or (intersectingPart.CFrame and intersectingPart.Size and intersectingPart.Shape)), "If you supply a table, it must have a CuttingPart or at least a CFrame, Size, and Shape.")
 
-	local params = ValidateDestructionParams(intersectingPart, overlapParams, CleanupDelay, OnVoxelDestruct, GridSize, SkipEncapsulatedVoxels, OnDestructCompleted, ...)
+	local params = ValidateDestructionParams(intersectingPart, FilterTagged, CleanupDelay, OnVoxelDestruct, GridSize, SkipEncapsulatedVoxels, OnDestructCompleted, ...)
 	task.defer(function()
 
 		if isModel then
@@ -1025,7 +1010,7 @@ function Shatterbox.Destroy(intersectingPart : Part | Model | Types.DestructionP
 		params.ID = params.ID or HttpService:GenerateGUID(false)
 
 		if isServer then
-			ReplicateDestructionToClients(params, os.time() + params.CleanupDelay)
+			ReplicateDestructionToClients(params)
 		end
 
 		local del = params.CleanupDelay
@@ -1049,7 +1034,7 @@ end
 -- Instantly performs voxel destruction around 'intersectingPart', skipping as many intermediate parts as possible. <br>
 --
 -- Returns an array of imaginary voxels for you to optionally create as debris.
-function Shatterbox.ImaginaryVoxels(intersectingPart : Part | Model | Types.DestructionParams, overlapParams : OverlapParams?, CleanupDelay : number?, GridSize : number?, SkipEncapsulatedVoxels : boolean?, destroyIntersectingPart : boolean?) : {Types.ImaginaryVoxel}
+function Shatterbox.ImaginaryVoxels(intersectingPart : Part | Model | Types.DestructionParams, FilterTagged : (string | {string})?, CleanupDelay : number?, GridSize : number?, SkipEncapsulatedVoxels : boolean?, destroyIntersectingPart : boolean?) : {Types.ImaginaryVoxel}
 	local isPart, isModel, isTbl = false, false, typeof(intersectingPart) == "table"
 	local cuttingPart = intersectingPart
 	if isTbl then  cuttingPart = intersectingPart.CuttingPart end
@@ -1057,7 +1042,7 @@ function Shatterbox.ImaginaryVoxels(intersectingPart : Part | Model | Types.Dest
 	assert(isPart or isModel or isTbl, "The input parameter to the destruction function must be a Part, Model, or a Table")
 	assert(not isTbl or (intersectingPart.CuttingPart or (intersectingPart.CFrame and intersectingPart.Size and intersectingPart.Shape)), "If you supply a table, it must have a CuttingPart or at least a CFrame, Size, and Shape.")
 
-	local params = ValidateDestructionParams(intersectingPart, overlapParams, CleanupDelay, nil, GridSize, SkipEncapsulatedVoxels)
+	local params = ValidateDestructionParams(intersectingPart, FilterTagged, CleanupDelay, nil, GridSize, SkipEncapsulatedVoxels)
 	if isTbl and (intersectingPart.destroyIntersectingPart or not intersectingPart.CuttingPart) then params.destroyIntersectingPart = true end
 
 	local voxels = {} :: {Types.ImaginaryVoxel}
@@ -1130,7 +1115,7 @@ function Shatterbox.CreateHitbox()
 	hitbox.CFrame = CFrame.new() :: CFrame
 	hitbox.Size = Vector3.new(1, 1, 1) :: Vector3
 	hitbox.Shape = Enum.PartType.Ball :: Enum.PartType
-	hitbox.OverlapParams = nil :: OverlapParams?
+	hitbox.FilterTagged = nil :: (string | {string})?
 	hitbox.OnVoxelDestruct = nil :: string?
 	hitbox.DestructParameters = {} :: {any}
 	hitbox.OperationCompletedCallback = nil :: (() -> ())?

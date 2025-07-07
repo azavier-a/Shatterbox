@@ -14,11 +14,11 @@ export type DestructionParams = {
 
 	CFrame : CFrame?,
 	Size : Vector3?,
-	Shape : Enum.PartType?, 
+	Shape : Enum.PartType?,
 
-	OverlapParams : OverlapParams?, 
-	GridSize : number?, 
-	CleanupDelay : number?, 
+	FilterTagged : (string | {string})?,
+	GridSize : number?,
+	CleanupDelay : number?,
 	SkipEncapsulatedVoxels : boolean?,
 
 	OnVoxelDestruct : string?,
