@@ -249,14 +249,14 @@ local function FindDirtyOp(intersectingPart : Part)
 end
 
 -- returns OverlapParams including all instances with the given tags.
-local function OverlapParamsOfTagged(tags : { string }) : OverlapParams
+local function OverlapParamsOfTagged(tags : { string }, instant) : OverlapParams
 	local arr = {}
 
 	if #tags == 1 then
-		arr = TaggedArray(tags[1])
+		arr = if instant then CollectionService:GetTagged(tags[1]) else TaggedArray(tags[1])
 	else
 		for _, tag in ipairs(tags) do
-			local taggedArray = TaggedArray(tag)
+			local taggedArray = if instant then CollectionService:GetTagged(tag) else TaggedArray(tag)
 			table.move(taggedArray, 1, #taggedArray, #arr + 1, arr)
 		end
 	end
@@ -401,11 +401,11 @@ local function HandleVoxelDestruction(callbackName : string?, voxel : Part, dirt
 end
 
 
-local function GetDestructibleParts(cuttingPart, filterTagged, doNotReparent)
+local function GetDestructibleParts(cuttingPart, filterTagged, doNotReparent, instant)
 	local dirtied = {}
 	local partsInPart = {}
 
-	local overlapParams = filterTagged and OverlapParamsOfTagged(filterTagged) or defaultOverlapParams
+	local overlapParams = filterTagged and OverlapParamsOfTagged(filterTagged, instant) or defaultOverlapParams
 
 	local op = cuttingPart.Parent
 	cuttingPart.Parent = tmpFolder
@@ -546,7 +546,7 @@ local function ImaginaryVoxels(params)
 
 	local voxels = {} :: {Types.ImaginaryVoxel}
 
-	local partsInPart, destructibleParts = {}, GetDestructibleParts(params.CuttingPart, params.FilterTagged, true)
+	local partsInPart, destructibleParts = {}, GetDestructibleParts(params.CuttingPart, params.FilterTagged, true, true)
 	for _, part in ipairs(destructibleParts) do
 		table.insert(partsInPart, {
 			CFrame = part.CFrame,
