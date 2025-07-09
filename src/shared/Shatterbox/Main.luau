@@ -28,6 +28,7 @@ local PathToServer = lib:WaitForChild("Server")
 ]]
 
 local IndestructibleTag = "Indestructible"
+local CollectionService = game:GetService("CollectionService")
 
 local RunService = game:GetService("RunService")
 local isServer, isClient = RunService:IsServer(), RunService:IsClient()
@@ -256,10 +257,7 @@ local function OverlapParamsOfTagged(tags : { string }) : OverlapParams
 	else
 		for _, tag in ipairs(tags) do
 			local taggedArray = TaggedArray(tag)
-			for _, taggedInstance in ipairs(taggedArray) do
-				if table.find(arr, taggedInstance) then continue end
-				table.insert(arr, taggedInstance)
-			end
+			table.move(taggedArray, 1, #taggedArray, #arr + 1, arr)
 		end
 	end
 
@@ -371,6 +369,10 @@ local function MarkDirty(Part : Part, dirtied, doNotReparent)
 
 		model.Name = Part.Name
 		model:AddTag("ShatterboxInstance")
+		model:SetAttribute("GridSize", Part:GetAttribute("GridSize"))
+		for _, tag in ipairs(Part:GetTags()) do
+			model:AddTag(tag)
+		end
 
 		if isClient then
 			local ot = Part.Transparency
@@ -483,14 +485,15 @@ local function SubdivWorker()
 		return true
 	end
 
-	local originalGridSize = Part:GetAttribute("GridSize")
 	for _, c in ipairs(created) do
-		local instanced = Part:Clone()
+		local instanced = Instance.new("Part")
+		instanced.Transparency = Part.Transparency
+		instanced.Material = Part.Material
+		instanced.Color = Part.Color
 		instanced.Anchored = true
 		instanced.CFrame = c.CFrame
 		instanced.Size = c.Size
 		instanced.Parent = dirtyParent
-		instanced:SetAttribute("GridSize", originalGridSize)
 	end
 	Part:Destroy()
 
@@ -511,7 +514,7 @@ local function ShatterWorker()
 	for _, Part in ipairs(partsInPart) do
 
 		local PartSize = Part.Size
-		local partGridSize = GridSize or Part:GetAttribute("GridSize") or Settings.DefaultGridSize
+		local partGridSize = GridSize or Part:GetAttribute("GridSize") or Part.Parent:GetAttribute("GridSize") or Settings.DefaultGridSize
 
 		if canUseEncapsulationChecks and PartEncapsulatesBlockPart(intersectingPart, Part.CFrame, PartSize) then
 
@@ -550,7 +553,7 @@ local function ImaginaryVoxels(params)
 			Size = part.Size,
 			DirtyParent = part.Parent,
 			Original = part,
-			GridSize = params.GridSize or part:GetAttribute("GridSize") or Settings.DefaultGridSize
+			GridSize = params.GridSize or part:GetAttribute("GridSize") or part.Parent:GetAttribute("GridSize") or Settings.DefaultGridSize
 		})
 	end
 
@@ -635,7 +638,11 @@ local function ImaginaryVoxels(params)
 			end
 		else
 
-			local newStatic = toDivide.Original:Clone()
+			local P = toDivide.Original
+			local newStatic = Instance.new("Part")
+			newStatic.Material = P.Material
+			newStatic.Transparency = P.Transparency
+			newStatic.Color = P.Color
 			newStatic.Anchored = true
 			newStatic.CFrame = toDivide.CFrame
 			newStatic.Size = toDivide.Size
