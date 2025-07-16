@@ -1,20 +1,48 @@
-struct Puppet {
-	GUID : string,
-	CFrame : CFrame,
-	Size : vector,
-	Color : Color3,
-	Material : u16(256..2311),
-	Transparency : f16
-}
-
-struct PartInstance {
-	CFrame : CFrame,
-	Size : vector,
+struct PartProperties {
 	Color : Color3,
 	Material : u16(256..2311),
 	Transparency : f16,
+	Reflectance : f16
+}
+
+struct Box {
+	CFrame : CFrame,
+	Size : vector
+}
+
+struct Destructible {
 	GridSize : f16?,
 	Tags : string[]
+}
+
+struct PartInstance {
+	..Box,
+
+	..PartProperties,
+
+	..Destructible
+}
+
+struct Puppet {
+	GUID : string,
+
+	..Box,
+
+	..PartProperties
+}
+
+struct Dirtied {
+	OriginalPart : Box,
+	Children : Box[],
+	
+	..Destructible,
+
+	..PartProperties
+}
+
+struct OpDirty {
+	ID : string,
+	Dirties : Dirtied[]
 }
 
 struct DestructionParamsType {
@@ -38,12 +66,6 @@ struct PuppetState {
 }
 
 
-event SignalDestruction {
-	From: Server,
-	Type: Reliable,
-	Call: ManyAsync,
-	Data: DestructionParamsType
-}
 
 event SignalUndo {
 	From: Server,
@@ -98,9 +120,23 @@ event DestroyPuppet {
 
 
 
-event ReplicateMap {
+event ReplicateOpDirties {
 	From: Server,
 	Type: Reliable,
 	Call: ManyAsync,
-	Data: PartInstance[]
+	Data: OpDirty[]
+}
+
+event ReplicateDestruction {
+	From: Server,
+	Type: Reliable,
+	Call: ManyAsync,
+	Data: (DestructionParamsType, PartInstance[]?)
+}
+
+event ReplicateImaginary {
+	From: Server,
+	Type: Reliable,
+	Call: ManyAsync,
+	Data: (DestructionParamsType, PartInstance[]?)
 }

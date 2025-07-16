@@ -42,7 +42,7 @@ ServerEffects.Default = function(voxel) voxel:Destroy() end
 -- Debris is tweened by clients, having the CFrames replicateed from the server.
 -- Only non-floors turn into debris (a floor has a vertical normal when casting toward it from the cuttingPart).
 -- Floors have a separate effect that makes them appear "broken".
-ServerEffects.BumpyFloorBreakWalls = function(voxel, dirtyParent, cuttingPart, isEdge)
+ServerEffects.BumpyFloorBreakWalls = function(voxel, dirtyParent, cuttingPart, isEdge, normal)
 
     -- retrieves a clone of the untouched original part, to check if the voxel should be considered a floor
     local castTo = Shatterbox.GetOriginalPart(dirtyParent)
@@ -70,6 +70,10 @@ ServerEffects.BumpyFloorBreakWalls = function(voxel, dirtyParent, cuttingPart, i
         voxel.Anchored = false
 
         Shatterbox.Puppeteer(voxel) -- start controlled replication of "voxel" to clients (tween between replication of CFrames)
+
+        if hitResult then
+            voxel.AssemblyLinearVelocity = -hitResult.Normal * (math.random() * 25 + 50)
+        end
 
         voxel.Parent = dirtyParent -- makes debris work with smooth cleanup and makes debris destructible again (the server side debris isn't replicated for clients when puppeteering)
     end

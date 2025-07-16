@@ -2,7 +2,7 @@
 --!optimize 2
 
 
--- Shatterbox release 7.5
+-- Shatterbox release 7.6
 
 
 --#selene: allow(multiple_statements)
@@ -10,71 +10,66 @@
 --#selene: allow(incorrect_standard_library_use)
 --#selene: allow(shadowing)
 
--- Shatterbox uses Blink for Client-Server communications
+local IndestructibleTag = "Indestructible"
+
+
 local lib = script.Parent:WaitForChild("lib")
+-- Shatterbox uses Blink for Client-Server communications
 local PathToClient = lib:WaitForChild("Client")
 local PathToServer = lib:WaitForChild("Server")
 
 --[[ IF YOU ALSO USE BLINK:
+
+	These steps ensure events are properly batched using Blink, saving performance.
+	I don't think anything bad happens if you don't set up batching using these steps.
 
 	1. Import the "Shatterbox.blink" file to your Blink config:		import "PATH_TO_SHATTERBOX/Shatterbox.blink"
 
 	2. Rebuild your blink files
 
 	3. Re-define PathToServer and PathToClient local variables defined above to the location of your blink files
-
-
-	These steps ensure events are properly batched using Blink
 ]]
 
-local IndestructibleTag = "Indestructible"
-local CollectionService = game:GetService("CollectionService")
+--[[ ROBLOX STUDIO BLINK USERS:
 
+	You can run this in the command line to populate/update the Shatterbox blink file, then you can continue above from Step 1 (use  import "Shatterbox" ):
+
+	local HS = game:GetService("HttpService");
+	local O = HS.HttpEnabled;
+	HS.HttpEnabled = true;
+	local S = HS:GetAsync("https://raw.githubusercontent.com/azavier-a/Shatterbox/refs/heads/main/src/shared/Shatterbox/Shatterbox.blink");
+	HS.HttpEnabled = O;
+	local SS = game:GetService("ServerStorage");
+	local F = SS:FindFirstChild("BLINK_CONFIGURATION_FILES");
+	if not F then
+		F = Instance.new("Folder");
+		F.Name = "BLINK_CONFIGURATION_FILES";
+		F.Parent = SS;
+	end
+	local SV = F:FindFirstChild("Shatterbox");
+	if not SV then
+		SV = Instance.new("StringValue");
+		SV.Name = "Shatterbox";
+		SV.Parent = F;
+	end
+	SV.Value = S;
+]]
 local RunService = game:GetService("RunService")
 local isServer, isClient = RunService:IsServer(), RunService:IsClient()
 
---[[ Settings Explained:
+-- See "HowToUse" for an explanation of the settings.
 
-UseSmoothCleanup:
-|	If false, the CleanupDelay will be ignored and no smooth cleanups will happen at all.
+-- Set this to false if you don't want to use client-server functionality (false = fully server side destructions)
+local USE_CLIENT_SERVER = true
 
-MaxDivisionsPerFrame:
-|	The target number of part divisions per frame. (1 division = up to 8 new parts)
-
-DefaultSmoothCleanupDelay:
-|	The default amount of time it takes for smooth restoration to happen if no value is provided.
-|	Currently, smooth cleanup is a forced feature.
-
-DefaultGridSize:
-|	The default grid size to use when none is passed and the part doesn't have a GridSize attribute.
-
-UsePriorityQueue:
-|	If true, will process newly added divisions before continuing to process old ones.
-
-PrioritizeRecentN:
-|	Priority queue will prioritize the most recent N operations using round-robin processing.
-
-PuppetReplicationFrequency:
-|	The default of 20 means every 1/20 seconds a replication of puppet debris happens.
-
-ClientTweenPuppets:
-|	Does nothing on server-side. Whether or not to tween in between the replication of puppet CFrames.
-
-PuppetReplicationFrameLimit:
-|	How many puppets are batched per frame for replication to all clients.
-
-PuppetSleepVelocity:
-|	If a server puppet is moving slower than this magnitude, its CFrame does not get replicated to clients.
-
-SkipInstanceCheck:
-|	A function for you to specify behavior for instances that are trying to be considered for destruction.
-|	should return true if it was skipped and return false if it was not.
-
-]]
 
 local Settings = {}
 
 Settings.UseSmoothCleanup = true
+
+--Settings.UseDynamicReset = true
+
+--Settings.DynamicResetDelay = 3
 
 Settings.MaxDivisionsPerFrame = 100
 
@@ -103,10 +98,7 @@ end
 
 
 
-local tmpFolder = workspace:FindFirstChild("ShatterboxTemporary") or Instance.new("Folder")
-tmpFolder.Parent = workspace
-tmpFolder.Name = "ShatterboxTemporary"
-
+local ClientEvents, ServerEvents, clientMapFolder, tmpFolder
 local function RecursiveFindHumanoid(i : Instance) return i:FindFirstChildWhichIsA("Humanoid") or  ( i.Parent and RecursiveFindHumanoid(i.Parent) ) end
 
 -- Returns true if an instance should NOT be considered for voxel destruction
@@ -127,15 +119,18 @@ end
 
 
 
+-- The ShatterboxTemporary folder, which contains things like debris (but also sometimes CuttingParts for a single frame)
+tmpFolder = workspace:FindFirstChild("ShatterboxTemporary") or Instance.new("Folder")
+tmpFolder.Parent = workspace
+tmpFolder.Name = "ShatterboxTemporary"
+
+
+
 -- If you modify any code below here, you are at serious risk of breaking the module. It probably already has a way to do what you need to do.
 
-
-
-
-
+local Shatterbox = {}
 
 local Types = require(script.Parent:WaitForChild("Types"))
-
 
 local OnVoxelDestructRegistry = setmetatable({}, {
 	__index = function(tbl, k) return (k and rawget(tbl, k:lower())) or rawget(tbl, "default") end
@@ -148,56 +143,40 @@ local function RegisterOnVoxelDestruct(name : string, client : Types.OnVoxelDest
 	OnVoxelDestructRegistry[id] = isClient and client or server
 end
 
-local Shatterbox = {}
-
 if isServer then
+	if USE_CLIENT_SERVER then
+		local ref = Instance.new("ObjectValue")
+		ref.Name = "ShatterboxModule"
+		ref.Value = script
+		local scr = lib.InitializeShatterbox
+		ref.Parent = scr
+		scr.Parent = game:GetService("StarterPlayer"):WaitForChild("StarterPlayerScripts")
+		scr.Enabled = true
+	end
+	ServerEvents = require(PathToServer).Shatterbox
+
 	local serverEffects = require(script.Parent.effects.Server)
 	serverEffects:SetReference(Shatterbox)
 	serverEffects.SetReference = nil
-	for name, func in pairs(serverEffects) do
-		OnVoxelDestructRegistry[name:lower()] = func
+	for name, func in pairs(serverEffects) do OnVoxelDestructRegistry[name:lower()] = func end
+elseif isClient then
+	if USE_CLIENT_SERVER then
+		clientMapFolder = workspace:FindFirstChild("ClientMap") or Instance.new("Folder")
+		clientMapFolder.Parent = workspace
+		clientMapFolder.Name = "ClientMap"
 	end
-end
-if isClient then
+	ClientEvents = require(PathToClient).Shatterbox
+
 	local clientEffects = require(script.Parent:WaitForChild("effects"):WaitForChild("Client"))
 	clientEffects:SetReference(Shatterbox)
 	clientEffects.SetReference = nil
-	for name, func in pairs(clientEffects) do
-		OnVoxelDestructRegistry[name:lower()] = func
-	end
+	for name, func in pairs(clientEffects) do OnVoxelDestructRegistry[name:lower()] = func end
 end
 
-
-
-local defaultOverlapParams = OverlapParams.new()
-defaultOverlapParams.FilterType = Enum.RaycastFilterType.Exclude
-defaultOverlapParams.FilterDescendantsInstances = { tmpFolder }
-
-
-local clientMapFolder
-if isClient then
-	clientMapFolder = Instance.new("Folder")
-	clientMapFolder.Parent = workspace
-	clientMapFolder.Name = "ClientMap"
-end
-
-
-if isServer then
-	local scr = lib.InitializeShatterbox
-
-	local ref = Instance.new("ObjectValue")
-	ref.Name = "ShatterboxModule"
-	ref.Value = script
-	ref.Parent = scr
-
-	scr.Parent = game:GetService("StarterPlayer"):WaitForChild("StarterPlayerScripts")
-	scr.Enabled = true
-end
-
-
--- A CFrame that is really far away. Disrespectfully stolen straight from the PartCahce module.
--- local CF_REALLY_FAR_AWAY = CFrame.new(0, 10e8, 0)
-
+local CollectionService = game:GetService("CollectionService")
+local TweenService = game:GetService("TweenService")
+local HttpService = game:GetService("HttpService")
+local Players = game:GetService("Players")
 
 local VertexMath = require(lib:WaitForChild("VertexMath"))
 local TaggedArray = require(script.Parent:WaitForChild("util"):WaitForChild("TaggedArray"))
@@ -210,18 +189,13 @@ local SubdivideFunctions = {
 	MOT = VertexMath.MOTS
 }
 
-local TweenService = game:GetService("TweenService")
-local HttpService = game:GetService("HttpService")
-local Players = game:GetService("Players")
+local defaultOverlapParams = OverlapParams.new()
+defaultOverlapParams.FilterType = Enum.RaycastFilterType.Exclude
+defaultOverlapParams.FilterDescendantsInstances = { tmpFolder }
 
-
-
-local opDirties = {} :: { 
+local opDirties = {} :: {
 	[string]: {
-		intersectingPart : Part, 
-		dirtied : {
-			{ Part : Part, OriginalParent : Instance, model : Model }
-		}
+		{ Part : Part, OriginalParent : Instance, model : Model }
 	}
 }
 
@@ -229,24 +203,30 @@ local ShatterQueue = {} :: { Types.DestructionParams }
 local DivQueue = {}
 local frameDivs = 0
 
-
 local Puppets = {} :: { [string] : Part }
 local CreatePuppetQueue = {}
 
+local ToReset = {} :: { [string] : {{Part : Part, OriginalParent : Instance, model : Model}}}
 
-local ToReset = {} :: {{Part : Part, OriginalParent : Instance}}
+--local activeReset = false
+--local lastOpTick = nil
+
+local accum = 0
 
 
-local ClientEvents = isClient and require(PathToClient).Shatterbox or nil
-local ServerEvents = isServer and require(PathToServer).Shatterbox or nil
-
-
-local function FindDirtyOp(intersectingPart : Part)
-	for _, intersectedDirties in pairs(opDirties) do
-		if intersectingPart == intersectedDirties.intersectingPart then return intersectedDirties.dirtied end
+local function AncestorGroupTags(i : Instance) : {string}
+	local ancestor = i:FindFirstAncestorWhichIsA("Model")
+	if not ancestor then
+		ancestor = i:FindFirstAncestorWhichIsA("Folder")
+		if not ancestor then return {} end
 	end
-	return nil
+
+	local tags = ancestor:GetTags()
+	if #tags ~= 0 then return tags end
+
+	return AncestorGroupTags(ancestor)
 end
+
 
 -- returns OverlapParams including all instances with the given tags.
 local function OverlapParamsOfTagged(tags : { string }, instant) : OverlapParams
@@ -297,31 +277,21 @@ local function ImaginaryVoxelize(part, GridSize)
 end
 
 
+local function UndoDirtyOp(ID : string, replicated : boolean?)
 
-
-
-local waitingForClients = {}
-
-local function StopWaitingOnUser(plr, ID)
-	local waiting = waitingForClients[ID]
-	local found = table.find(waiting, plr.UserId)
-	if not found then return end
-	table.remove(waiting, found)
-	if #waiting == 0 then waitingForClients[ID] = nil end
-end
-
-local function StartWaitingOnUser(plr, ID)
-	waitingForClients[ID] = waitingForClients[ID] or {}
-	table.insert(waitingForClients[ID], plr.UserId)
-end
-
-
-
-
-local function UndoDirtyOp(ID : string)
+	if USE_CLIENT_SERVER and isServer then ServerEvents.SignalUndo.FireAll(ID) end
 
 	local intersectedDirties = opDirties[ID]
-	if not intersectedDirties then return end
+	if not intersectedDirties then
+		if replicated then
+			local reset = false
+			local disconnect = ClientEvents.SignalReset.On(function() reset = true end)
+			repeat RunService.Heartbeat:Wait() until opDirties[ID] or reset
+			disconnect()
+			if reset then return end
+			intersectedDirties = opDirties[ID]
+		else return end
+	end
 	opDirties[ID] = nil
 
 	local found
@@ -333,19 +303,31 @@ local function UndoDirtyOp(ID : string)
 	end
 	if found then table.remove(ShatterQueue, found) end
 
-	if isServer then ServerEvents.SignalUndo.FireAll(ID) end
-
-	for _, dirtied in ipairs(intersectedDirties.dirtied) do
-		local model = dirtied.model
+	for _, dirtied in ipairs(intersectedDirties) do
 		local restored = dirtied.Part:Clone()
-		restored.Parent = model.Parent
-		model:Destroy()
+		restored.Parent = dirtied.model.Parent
+		dirtied.model:Destroy()
 	end
+
+	--[[
+	if isServer then
+		if next(opDirties) then
+			ServerEvents.SignalUndo.FireAll(ID)
+		elseif Settings.UseDynamicReset and not activeReset then
+			lastOpTick = os.time()
+			activeReset = true
+			while os.time() - lastOpTick < Settings.DynamicResetDelay do
+				RunService.Heartbeat:Wait()
+			end
+			activeReset = false
+			Shatterbox.Reset()
+		end
+	end
+	--]]
 end
 
 
-
-local function MarkDirty(Part : Part, dirtied, doNotReparent)
+local function MarkDirty(ID, Part : Part)
 
 	if Part:HasTag("ShatterboxDebris") then return end
 
@@ -354,18 +336,30 @@ local function MarkDirty(Part : Part, dirtied, doNotReparent)
 	if PartParent and not PartParent:HasTag("ShatterboxInstance") then
 		local model = Instance.new("Model")
 
-		if isServer then 
-			table.insert(ToReset, {
-				Part = Part,
-				OriginalParent = PartParent
-			})
+		if USE_CLIENT_SERVER and isServer then
+			for _, tag in ipairs(AncestorGroupTags(Part)) do
+				model:AddTag(tag)
+				Part:AddTag(tag)
+			end
+
+			if not Part:IsDescendantOf(workspace.CurrentCamera) then
+				--if activeReset then lastOpTick = os.time() end
+				ToReset[ID] = ToReset[ID] or {}
+				table.insert(ToReset[ID], {
+					Part = Part,
+					OriginalParent = PartParent,
+					model = model
+				})
+			end
 		end
 
-		if doNotReparent then
-			model.Parent = PartParent
-		else
-			model.Parent = isClient and clientMapFolder or workspace.CurrentCamera
-		end
+		model.Parent =
+			if not USE_CLIENT_SERVER then
+				PartParent
+			elseif isClient then
+				clientMapFolder
+			else
+				workspace.CurrentCamera
 
 		model.Name = Part.Name
 		model:AddTag("ShatterboxInstance")
@@ -374,17 +368,10 @@ local function MarkDirty(Part : Part, dirtied, doNotReparent)
 			model:AddTag(tag)
 		end
 
-		if isClient then
-			local ot = Part.Transparency
-			Part.Transparency = 1
-			Part.Parent = nil
-			Part = Part:Clone()
-			Part.Transparency = ot
-		end
-
 		Part.Parent = model
 
-		table.insert(dirtied, {
+		opDirties[ID] = opDirties[ID] or {}
+		table.insert(opDirties[ID], {
 			Part = Part,
 			OriginalParent = PartParent,
 			model = model
@@ -401,28 +388,28 @@ local function HandleVoxelDestruction(callbackName : string?, voxel : Part, dirt
 end
 
 
-local function GetDestructibleParts(cuttingPart, filterTagged, doNotReparent, instant)
-	local dirtied = {}
+local function GetDestructibleParts(ID, cuttingPart, filterTagged, instant, replicated)
 	local partsInPart = {}
 
-	local overlapParams = filterTagged and OverlapParamsOfTagged(filterTagged, instant) or defaultOverlapParams
+	local overlapParams =
+		if filterTagged then
+			OverlapParamsOfTagged(filterTagged, instant)
+		else
+			defaultOverlapParams
 
 	local op = cuttingPart.Parent
 	cuttingPart.Parent = tmpFolder
 	for _, part in ipairs( workspace:GetPartsInPart(cuttingPart, overlapParams) ) do
 
+		if replicated and not part:IsDescendantOf(clientMapFolder) then continue end
+
 		if ShouldSkipInstance(part) then continue end
 
-		MarkDirty(part, dirtied, doNotReparent) -- adds this part to the smooth cleanup for this destruction, if it's not already destroyed by something else
+		MarkDirty(ID, part) -- adds this part to the smooth cleanup for this destruction, if it's not already destroyed by something else
 
 		table.insert(partsInPart, part)
 	end
 	cuttingPart.Parent = op
-
-	if #dirtied > 0 then
-		local found = FindDirtyOp(cuttingPart)
-		table.move(dirtied, 1, #dirtied, #found + 1, found)
-	end
 
 	return partsInPart
 end
@@ -437,7 +424,7 @@ local function PopShatterQueue()
 
 		shatterPart, partsInPart = v.CuttingPart, {}
 
-		for _, part in ipairs( GetDestructibleParts(shatterPart, v.FilterTagged) ) do
+		for _, part in ipairs( GetDestructibleParts(v.ID, shatterPart, v.FilterTagged, false, v.replicated) ) do
 
 			if part:HasTag("ShatterboxDebris") then
 				HandleVoxelDestruction(v.OnVoxelDestruct, part, part.Parent, shatterPart, false, unpack(v.DestructParameters))
@@ -459,7 +446,6 @@ local function PopShatterQueue()
 
 	return popped, partsInPart
 end
-
 
 
 -- processes one of the divisions in the DivQueue, returns true if a divison was processed.
@@ -488,6 +474,7 @@ local function SubdivWorker()
 	for _, c in ipairs(created) do
 		local instanced = Instance.new("Part")
 		instanced.Transparency = Part.Transparency
+		instanced.Reflectance = Part.Reflectance
 		instanced.Material = Part.Material
 		instanced.Color = Part.Color
 		instanced.Anchored = true
@@ -533,20 +520,16 @@ end
 
 local function InsertToShatterQueue(params : Types.DestructionParams)
 
-	local intersectingPart = params.CuttingPart
-
-	if #GetDestructibleParts(intersectingPart, params.FilterTagged) == 0 then return end
-
 	table.insert(ShatterQueue, params)
 end
-
 
 
 local function ImaginaryVoxels(params)
 
 	local voxels = {} :: {Types.ImaginaryVoxel}
 
-	local partsInPart, destructibleParts = {}, GetDestructibleParts(params.CuttingPart, params.FilterTagged, true, true)
+	local partsInPart, destructibleParts = {}, GetDestructibleParts(params.ID, params.CuttingPart, params.FilterTagged, true, params.replicated)
+
 	for _, part in ipairs(destructibleParts) do
 		table.insert(partsInPart, {
 			CFrame = part.CFrame,
@@ -560,7 +543,7 @@ local function ImaginaryVoxels(params)
 	if #partsInPart == 0 then
 		if params.destroyIntersectingPart then params.CuttingPart:Destroy() end
 
-		if Settings.UseSmoothCleanup then task.delay(params.CleanupDelay, UndoDirtyOp, params.ID) end
+		if not params.replicated and Settings.UseSmoothCleanup then task.delay(params.CleanupDelay, UndoDirtyOp, params.ID, params.replicated) end
 
 		return {}
 	end
@@ -642,6 +625,7 @@ local function ImaginaryVoxels(params)
 			local newStatic = Instance.new("Part")
 			newStatic.Material = P.Material
 			newStatic.Transparency = P.Transparency
+			newStatic.Reflectance = P.Reflectance
 			newStatic.Color = P.Color
 			newStatic.Anchored = true
 			newStatic.CFrame = toDivide.CFrame
@@ -659,7 +643,6 @@ local function ImaginaryVoxels(params)
 
 	return voxels :: {Types.ImaginaryVoxel}
 end
-
 
 
 local function ValidateDestructionParams(intersectingPart : Part | Model | Types.DestructionParams, FilterTagged : (string | {string})?, CleanupDelay : number?, OnVoxelDestruct : string?, GridSize : number?, SkipEncapsulatedVoxels : boolean?, OnDestructCompleted : (() -> ())?, ... : any)
@@ -703,7 +686,6 @@ local function ValidateDestructionParams(intersectingPart : Part | Model | Types
 	local filterTagged = iP.FilterTagged or FilterTagged
 	if typeof(filterTagged) == "string" then filterTagged = { filterTagged } end
 
-
 			params.FilterTagged = filterTagged
 			  params.CleanupDelay = iP.CleanupDelay			   or CleanupDelay   		     or Settings.DefaultSmoothCleanupDelay
 		    params.OnVoxelDestruct = iP.OnVoxelDestruct 		   or OnVoxelDestruct
@@ -717,9 +699,6 @@ local function ValidateDestructionParams(intersectingPart : Part | Model | Types
 	return params :: Types.DestructionParams
 end
 
-
-
-local accum = 0
 
 local function HeartbeatWorker(deltaTime)
 	frameDivs = 0
@@ -742,7 +721,8 @@ local function HeartbeatWorker(deltaTime)
 				Size = voxel.Size,
 				Material = voxel.Material.Value,
 				Color = voxel.Color,
-				Transparency = voxel.Transparency
+				Transparency = voxel.Transparency,
+				Reflectance = voxel.Reflectance
 			})
 		end
 		ServerEvents.CreatePuppets.FireAll(toReplicate)
@@ -772,50 +752,107 @@ local function HeartbeatWorker(deltaTime)
 	end
 end
 
+local function GetMapParts(ID)
+	local tr = ToReset[ID]
+	if not tr then return nil end
+
+	local mapParts = {}
+
+	for _, dirtied in ipairs(tr) do
+		local p = dirtied.Part
+
+		table.insert(mapParts, {
+			CFrame = p.CFrame,
+			Size = p.Size,
+
+			Color = p.Color,
+			Material = p.Material.Value,
+			Transparency = p.Transparency,
+			Reflectance = p.Reflectance,
+
+			Tags = p:GetTags(),
+			GridSize = p:GetAttribute("GridSize")
+		})
+	end
+
+	return mapParts
+end
 
 
-local function ReplicateDestructionFromServer(params, skipEvent)
+local function CreateReplicatedMapParts(ID, mapParts)
+	if not mapParts then return end
 
+	for _, serialPart in ipairs(mapParts) do
+		local Part = Instance.new("Part")
+		Part.Anchored = true
+		Part.Size = serialPart.Size
+		Part.CFrame = serialPart.CFrame
+
+		Part.Color = serialPart.Color
+		Part.Material = Enum.Material:FromValue(serialPart.Material)
+		Part.Transparency = serialPart.Transparency
+		Part.Reflectance = serialPart.Reflectance
+
+		Part:SetAttribute("GridSize", serialPart.GridSize)
+		for _, tag in ipairs(serialPart.Tags) do
+			Part:AddTag(tag)
+		end
+
+		Part.Parent = clientMapFolder
+
+		MarkDirty(ID, Part)
+	end
+end
+
+
+local function ReplicateDestructionFromServer(params, mapParts)
 	params.Shape = Enum.PartType:FromValue(params.Shape)
 
 	local dParams = ValidateDestructionParams(params)
 
-	if dParams.CuttingPart:IsA("Model") then
-		for _, desc in ipairs(dParams.CuttingPart:GetDescendants()) do
-			if not desc:IsA("Part") then continue end
-			params.CuttingPart = desc
-			ReplicateDestructionFromServer(params, true)
-		end
-		ClientEvents.MapReplicationCompleted.Fire()
-		return
-	end
+ 	CreateReplicatedMapParts(dParams.ID, mapParts)
 
-	local ID = dParams.ID
-	opDirties[ID] = {
-		intersectingPart = dParams.CuttingPart,
-		dirtied = {}
-	}
+	dParams.replicated = true
 
 	InsertToShatterQueue(dParams)
-
-	if not skipEvent then ClientEvents.MapReplicationCompleted.Fire(ID) end
 end
 
 
 local function ReplicateDestructionToClients(destructionParams : Types.DestructionParams)
-
 	destructionParams = table.clone(destructionParams)
 	destructionParams.Shape = destructionParams.Shape.Value
 	destructionParams.OnDestructCompleted = nil
-
 	destructionParams.CuttingPart = nil
 
-	local ID = destructionParams.ID
-	for _, plr in ipairs(Players:GetPlayers()) do StartWaitingOnUser(plr, ID) end
-	ServerEvents.SignalDestruction.FireAll(destructionParams)
-	while waitingForClients[ID] do RunService.Heartbeat:Wait() end
+	ServerEvents.ReplicateDestruction.FireAll(destructionParams, GetMapParts(destructionParams.ID))
 end
 
+
+local function ReplicateImaginaryFromServer(params, mapParts)
+	params.Shape = Enum.PartType:FromValue(params.Shape)
+	params.SkipEncapsulatedVoxels = true
+
+	local dParams = ValidateDestructionParams(params)
+
+	CreateReplicatedMapParts(dParams.ID, mapParts)
+
+	dParams.replicated = true
+
+	DivQueue = {}
+	ImaginaryVoxels(dParams)
+end
+
+
+local function ReplicateImaginaryToClients(destructionParams : Types.DestructionParams)
+	destructionParams = table.clone(destructionParams)
+	destructionParams.Shape = destructionParams.Shape.Value
+	destructionParams.OnDestructCompleted = nil
+	destructionParams.OnVoxelDestruct = nil
+	destructionParams.CuttingPart = nil
+	destructionParams.SkipEncapsulatedVoxels = nil
+
+	ServerEvents.ReplicateImaginary.FireAll(destructionParams, GetMapParts(destructionParams.ID))
+end
 
 
 local function CreatePuppets(puppets)
@@ -828,6 +865,7 @@ local function CreatePuppets(puppets)
 		Part.CFrame = puppet.CFrame
 		Part.Material = Enum.Material:FromValue(puppet.Material)
 		Part.Transparency = puppet.Transparency
+		Part.Reflectance = puppet.Reflectance
 		Part.Parent = tmpFolder
 
 		Puppets[puppet.GUID] = Part
@@ -862,56 +900,91 @@ local function DestroyPuppet(guid)
 end
 
 
-
 local function ReplicateMapToNewPlayer(plr)
 	local toReplicate = {}
-	for _, child in ipairs(workspace.CurrentCamera:GetChildren()) do
-		if not child:IsA("Part") then continue end
+	for ID, dirtied in pairs(opDirties) do
+		local serialDirties = {}
+		for _, dirty in ipairs(dirtied) do
+			local serialChildren = {}
+			for _, p in ipairs(dirty.model:GetChildren()) do
+				table.insert(serialChildren, {
+					CFrame = p.CFrame,
+					Size = p.Size,
+				})
+			end
+			local p = dirty.Part
+			local serialDirtied = {}
+			serialDirtied.OriginalPart = { CFrame = p.CFrame, Size = p.Size }
+			serialDirtied.Children = serialChildren
+			serialDirtied.GridSize = p:GetAttribute("GridSize")
+			serialDirtied.Tags = p:GetTags()
+			serialDirtied.Color = p.Color
+			serialDirtied.Material = p.Material.Value
+			serialDirtied.Transparency = p.Transparency
+			serialDirties.Reflectance = p.Reflectance
+			table.insert(serialDirties, serialDirtied)
+		end
 		table.insert(toReplicate, {
-			CFrame = child.CFrame,
-			Size = child.Size,
-			Color = child.Color,
-			Material = child.Material.Value,
-			Transparency = child.Transparency,
-			GridSize = child:GetAttribute("GridSize"),
-			Tags = child:GetTags()
+			ID = ID,
+			Dirties = serialDirties
 		})
 	end
-	for _, opDirty in pairs(opDirties) do
-		for _, dirty in ipairs(opDirty.dirtied) do
-			local p = dirty.Part
-			table.insert(toReplicate, {
-				CFrame = p.CFrame,
-				Size = p.Size,
-				Color = p.Color,
-				Material = p.Material.Value,
-				Transparency = p.Transparency,
-				GridSize = p:GetAttribute("GridSize"),
-				Tags = p:GetTags()
-			})
-		end
-	end
+
 	if #toReplicate == 0 then return end
-	ServerEvents.ReplicateMap.Fire(plr, toReplicate)
+
+	ServerEvents.ReplicateOpDirties.Fire(plr, toReplicate)
 end
 
 
-local function ReplicateMapFromServer(MapParts)
+local function ReplicateMapFromServer(SerialOpDirties)
 
-	for _, mapPart in ipairs(MapParts) do
-		local Part = Instance.new("Part")
-		Part.Anchored = true
-		Part.Color = mapPart.Color
-		Part.Size = mapPart.Size
-		Part.CFrame = mapPart.CFrame
-		Part.Material = Enum.Material:FromValue(mapPart.Material)
-		Part.Transparency = mapPart.Transparency
-		Part.Parent = clientMapFolder
-		Part:SetAttribute("GridSize", mapPart.GridSize)
-		for _, tag in ipairs(mapPart.Tags) do Part:AddTag(tag) end
+	for _, serialOpDirty in ipairs(SerialOpDirties) do
+		local dirtied = {}
+
+		for _, serialDirtied in ipairs(serialOpDirty.Dirties) do
+			local C = serialDirtied.Color
+			local M = Enum.Material:FromValue(serialDirtied.Material)
+			local T = serialDirtied.Transparency
+			local R = serialDirtied.Reflectance
+
+			local replicatedOriginal = Instance.new("Part")
+			replicatedOriginal.Anchored = true
+			replicatedOriginal.CFrame = serialDirtied.OriginalPart.CFrame
+			replicatedOriginal.Size = serialDirtied.OriginalPart.Size
+			replicatedOriginal.Color = C
+			replicatedOriginal.Material = M
+			replicatedOriginal.Transparency = T
+			replicatedOriginal.Reflectance = R
+			replicatedOriginal:SetAttribute("GridSize", serialDirtied.GridSize)
+
+			local model = Instance.new("Model");
+			model:AddTag("ShatterboxInstance")
+			model:SetAttribute("GridSize", serialDirtied.GridSize)
+
+			for _, tag in ipairs(serialDirtied.Tags) do
+				replicatedOriginal:AddTag(tag)
+				model:AddTag(tag)
+			end
+
+			for _, serialChild in ipairs(serialDirtied.Children) do
+				local Part = Instance.new("Part")
+				Part.Anchored = true
+				Part.Size = serialChild.Size
+				Part.CFrame = serialChild.CFrame
+				Part.Color = C
+				Part.Material = M
+				Part.Transparency = T
+				Part.Reflectance = R
+				Part.Parent = model
+			end
+
+			model.Parent = clientMapFolder
+			table.insert(dirtied, { model = model, Part = replicatedOriginal })
+		end
+
+		opDirties[serialOpDirty.ID] = dirtied
 	end
 end
-
 
 
 
@@ -929,16 +1002,9 @@ function Shatterbox.Puppeteer(voxel : Part)
 	voxel:AddTag(IndestructibleTag)
 	voxel.Parent = workspace.CurrentCamera
 
-	local noSleepDelay = 0.1
-	local accum = 0
-
 	local noSleepCon : RBXScriptConnection
 	noSleepCon = RunService.Heartbeat:Connect(function(deltaTime)
-		accum += deltaTime
-		while accum > noSleepDelay do
-			accum -= noSleepDelay
-			voxel:ApplyImpulse(Vector3.yAxis * -0.0001)
-		end
+		voxel:ApplyImpulse(Vector3.yAxis * -0.0001)
 	end)
 
 	local guid = HttpService:GenerateGUID(false)
@@ -959,7 +1025,6 @@ function Shatterbox.Puppeteer(voxel : Part)
 		ServerEvents.DestroyPuppet.FireAll(guid)
 	end)
 end
-
 
 
 -- Completely voxelizes a given part down to a specified GridSize, or uses the default GridSize specified in the Settings. <br>
@@ -987,13 +1052,10 @@ function Shatterbox.Voxelize(Part : Part, GridSize : number?) : {Part}
 end
 
 
-
 -- Performs voxel destruction around the 'intersectingPart' according to the FilterTagged supplied.
 --
 -- if no FilterTagged is given, everything except IndestructibleTag tagged Block parts are considered for destruction.
 function Shatterbox.Destroy(intersectingPart : Part | Model | Types.DestructionParams, FilterTagged : (string | {string})?, CleanupDelay : number?, OnVoxelDestruct : string?, GridSize : number?, SkipEncapsulatedVoxels : boolean?, OnDestructCompleted : (() -> ())?, ... : any)
-	assert(isServer, "You can only use Destroy on the server-side in this release.")
-
 	local isPart, isModel, isTbl = false, false, typeof(intersectingPart) == "table"
 	local cuttingPart = intersectingPart
 	if isTbl then  cuttingPart = intersectingPart.CuttingPart end
@@ -1009,33 +1071,29 @@ function Shatterbox.Destroy(intersectingPart : Part | Model | Types.DestructionP
 				if not desc:IsA("Part") then continue end
 				local p = table.clone(params)
 				p.CuttingPart = desc
-				Shatterbox.Destroy(p) 
+				Shatterbox.Destroy(p)
 			end
 			return
 		end
 
 		params.ID = params.ID or HttpService:GenerateGUID(false)
 
-		if isServer then
+		if #GetDestructibleParts(params.ID, params.CuttingPart, params.FilterTagged, true) == 0 then
+			return
+		end
+
+		-- starts the smooth cleanup counter
+		if Settings.UseSmoothCleanup then task.delay(params.CleanupDelay, UndoDirtyOp, params.ID) end
+
+		if params.CleanupDelay <= 0 then return end
+
+		if USE_CLIENT_SERVER and isServer then
 			ReplicateDestructionToClients(params)
 		end
 
-		local del = params.CleanupDelay
-
-		if del > 0 then
-			opDirties[params.ID] = opDirties[params.ID] or {
-				intersectingPart = params.CuttingPart,
-				dirtied = {}
-			}
-
-			-- starts the smooth cleanup counter
-			if isServer and Settings.UseSmoothCleanup then task.delay(del, UndoDirtyOp, params.ID) end
-
-			InsertToShatterQueue(params)
-		end
+		InsertToShatterQueue(params)
 	end)
 end
-
 
 
 -- Instantly performs voxel destruction around 'intersectingPart', skipping as many intermediate parts as possible. <br>
@@ -1067,14 +1125,17 @@ function Shatterbox.ImaginaryVoxels(intersectingPart : Part | Model | Types.Dest
 
 	params.ID = params.ID or HttpService:GenerateGUID(false)
 
-	opDirties[params.ID] = opDirties[params.ID] or {
-		intersectingPart = params.CuttingPart,
-		dirtied = {}
-	}
+	if #GetDestructibleParts(params.ID, params.CuttingPart, params.FilterTagged, true) == 0 then
+		return voxels
+	end
 
+	if USE_CLIENT_SERVER and isServer then
+		ReplicateImaginaryToClients(params)
+	end
+
+	DivQueue = {}
 	return ImaginaryVoxels(params)
 end
-
 
 
 -- resets all modified parts to where they originally were (turning the map back to normal)
@@ -1084,25 +1145,26 @@ function Shatterbox.Reset()
 
 	tmpFolder:ClearAllChildren()
 
-	for ID in pairs(opDirties) do UndoDirtyOp(ID) end
+	for ID in pairs(opDirties) do UndoDirtyOp(ID, USE_CLIENT_SERVER and isClient) end
 
 	opDirties = {}
 
-	if isClient then
-		clientMapFolder:ClearAllChildren()
-	end
-
-	if isServer then
-		workspace.CurrentCamera:ClearAllChildren()
-		for _, toRestore in ipairs(ToReset) do
-			local cloned = toRestore.Part:Clone()
-			cloned.Parent = toRestore.OriginalParent
+	if USE_CLIENT_SERVER then
+		if isServer then
+			workspace.CurrentCamera:ClearAllChildren()
+			for _, toReset in pairs(ToReset) do
+				for _, toRestore in ipairs(toReset) do
+					local cloned = toRestore.Part:Clone()
+					cloned.Parent = toRestore.OriginalParent
+				end
+			end
+			ToReset = {}
+			ServerEvents.SignalReset.FireAll()
+		elseif isClient then
+			clientMapFolder:ClearAllChildren()
 		end
-		ToReset = {}
-		ServerEvents.SignalReset.FireAll()
 	end
 end
-
 
 
 -- Cancels any ongoing operations
@@ -1110,9 +1172,8 @@ function Shatterbox.ClearQueue()
 	DivQueue = {}
 	ShatterQueue = {}
 
-	if isServer then ServerEvents.SignalClearQueue.FireAll() end
+	if USE_CLIENT_SERVER and isServer then ServerEvents.SignalClearQueue.FireAll() end
 end
-
 
 
 -- Creates a "Hitbox" object which can be used in place of the destruction functions, and has additional functionality. (like VoxBreaker moveable hitbox)
@@ -1190,8 +1251,6 @@ function Shatterbox.CreateHitbox()
 end
 
 
-
-
 local cachedOriginalClones = {} :: { [Model] : Part }
 
 local function deleteClone(model)
@@ -1211,7 +1270,7 @@ function Shatterbox.GetOriginalPart(dirtyParent : Model) : Part?
 	if found then return found end
 
 	for _, dirties in pairs(opDirties) do
-		for _, dirtied in ipairs(dirties.dirtied) do
+		for _, dirtied in ipairs(dirties) do
 			if dirtied.model == dirtyParent then
 				local clone = dirtied.Part:Clone()
 				cachedOriginalClones[dirtyParent] = clone
@@ -1225,8 +1284,6 @@ function Shatterbox.GetOriginalPart(dirtyParent : Model) : Part?
 end
 
 
-
-
 -- Will return true if "contains" is FULLY contained by "part", otherwise false
 function Shatterbox.PartEncapsulatesBlockPart(part : Part, contains : Part)
 	assert(part:IsA("Part"), "You can only use this function when a Part is the container.")
@@ -1235,10 +1292,8 @@ function Shatterbox.PartEncapsulatesBlockPart(part : Part, contains : Part)
 end
 
 
-
 -- Will register the given callback to the given name. It's suggested you do this at the top of the module instead, otherwise it is only registered on the side you called this function from.
 function Shatterbox.RegisterOnVoxelDestruct(name : string, callback : Types.OnVoxelDestruct) RegisterOnVoxelDestruct(name, callback, callback) end
-
 
 
 -- Will wait for the given OnVoxelDestruct callback to be registered with a default timeout of 5 seconds
@@ -1254,31 +1309,27 @@ function Shatterbox.WaitForRegistry(name : string, timeout : number?) : string
 end
 
 
-
 Shatterbox.OnVoxelDestruct = HandleVoxelDestruction
 
 
-
 if isServer then
-	ServerEvents.MapReplicationCompleted.On(StopWaitingOnUser)
+	if USE_CLIENT_SERVER then
+		Players.PlayerAdded:Connect(ReplicateMapToNewPlayer)
+	end
+elseif isClient then
+	if USE_CLIENT_SERVER then
+		ClientEvents.SignalUndo.On(function(ID : string) UndoDirtyOp(ID, true) end)
+		ClientEvents.SignalClearQueue.On(Shatterbox.ClearQueue)
+		ClientEvents.SignalReset.On(Shatterbox.Reset)
 
-	Players.PlayerAdded:Connect(ReplicateMapToNewPlayer)
-end
-
-
-if isClient then
-	ClientEvents.SignalDestruction.On(ReplicateDestructionFromServer)
-	ClientEvents.SignalUndo.On(UndoDirtyOp)
-	ClientEvents.SignalClearQueue.On(Shatterbox.ClearQueue)
-	ClientEvents.SignalReset.On(Shatterbox.Reset)
-
+		ClientEvents.ReplicateOpDirties.On(ReplicateMapFromServer)
+		ClientEvents.ReplicateDestruction.On(ReplicateDestructionFromServer)
+		ClientEvents.ReplicateImaginary.On(ReplicateImaginaryFromServer)
+	end
 	ClientEvents.CreatePuppets.On(CreatePuppets)
 	ClientEvents.ReplicatePuppetStates.On(ReplicatePuppetStates)
 	ClientEvents.DestroyPuppet.On(DestroyPuppet)
-
-	ClientEvents.ReplicateMap.On(ReplicateMapFromServer)
 end
-
 
 
 RunService.Heartbeat:Connect(HeartbeatWorker)
