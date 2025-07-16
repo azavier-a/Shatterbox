@@ -214,17 +214,21 @@ local ToReset = {} :: { [string] : {{Part : Part, OriginalParent : Instance, mod
 local accum = 0
 
 
-local function AncestorGroupTags(i : Instance) : {string}
-	local ancestor = i:FindFirstAncestorWhichIsA("Model")
+local function AncestorGroupTags(i : Instance, tags) : {string}
+	tags = tags or {}
+
+	local ancestor = i:FindFirstAncestorWhichIsA("Folder")
 	if not ancestor then
-		ancestor = i:FindFirstAncestorWhichIsA("Folder")
-		if not ancestor then return {} end
+		ancestor = i:FindFirstAncestorWhichIsA("Model")
+		if not ancestor then return tags end
 	end
 
-	local tags = ancestor:GetTags()
-	if #tags ~= 0 then return tags end
+	local t = ancestor:GetTags()
+	if #t > 0 then
+		table.move(t, 1, #t, #tags + 1, tags)
+	end
 
-	return AncestorGroupTags(ancestor)
+	return AncestorGroupTags(ancestor, tags)
 end
 
 
@@ -383,8 +387,11 @@ end
 -- Uses the given callback from the OnVoxelDestruct registry to destroy the given voxel
 local function HandleVoxelDestruction(callbackName : string?, voxel : Part, dirtyParent : Model, intersectingPart : BasePart, isEdge : boolean, ... : any)
 	if not voxel:HasTag("ShatterboxDebris") then voxel.Parent = tmpFolder end
-	task.spawn(OnVoxelDestructRegistry[callbackName], voxel, dirtyParent, intersectingPart, isEdge, ...)
-	task.defer(voxel.AddTag, voxel, "ShatterboxDebris")
+	local args = { ... }
+	coroutine.wrap(function()
+		OnVoxelDestructRegistry[callbackName](voxel, dirtyParent, intersectingPart, isEdge, unpack(args))
+		voxel:AddTag("ShatterboxDebris")
+	end)()
 end
 
 
@@ -427,7 +434,7 @@ local function PopShatterQueue()
 		for _, part in ipairs( GetDestructibleParts(v.ID, shatterPart, v.FilterTagged, false, v.replicated) ) do
 
 			if part:HasTag("ShatterboxDebris") then
-				HandleVoxelDestruction(v.OnVoxelDestruct, part, part.Parent, shatterPart, false, unpack(v.DestructParameters))
+				HandleVoxelDestruction(v.OnVoxelDestruct, part, part.Parent, shatterPart, Shatterbox.PartEncapsulatesBlockPart(shatterPart, part), unpack(v.DestructParameters))
 				continue
 			end
 
