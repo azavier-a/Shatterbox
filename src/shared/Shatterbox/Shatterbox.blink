@@ -2,7 +2,7 @@ struct PartProperties {
 	Color : Color3,
 	Material : u16(256..2311),
 	Transparency : f16,
-	Reflectance : f16
+	Reflectance : f16?
 }
 
 struct Box {
@@ -88,14 +88,6 @@ event SignalReset {
 
 
 
-event MapReplicationCompleted {
-	From: Client,
-	Type: Reliable,
-	Call: SingleAsync,
-	Data: string
-}
-
-
 
 event CreatePuppets {
 	From: Server,
@@ -120,11 +112,11 @@ event DestroyPuppet {
 
 
 
-event ReplicateOpDirties {
+event ReplicateMap {
 	From: Server,
 	Type: Reliable,
 	Call: ManyAsync,
-	Data: OpDirty[]
+	Data: (OpDirty[], PartInstance[])
 }
 
 event ReplicateDestruction {

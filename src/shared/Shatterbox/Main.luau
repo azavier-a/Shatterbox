@@ -2,7 +2,7 @@
 --!optimize 2
 
 
--- Shatterbox release 7.6
+-- Shatterbox release 7.7
 
 
 --#selene: allow(multiple_statements)
@@ -355,15 +355,13 @@ local function MarkDirty(ID, Part : Part)
 					model = model
 				})
 			end
-		end
 
-		model.Parent =
-			if not USE_CLIENT_SERVER then
-				PartParent
-			elseif isClient then
-				clientMapFolder
-			else
-				workspace.CurrentCamera
+			model.Parent = workspace.CurrentCamera
+		elseif USE_CLIENT_SERVER then
+			model.Parent = clientMapFolder
+		else
+			model.Parent = PartParent
+		end
 
 		model.Name = Part.Name
 		model:AddTag("ShatterboxInstance")
@@ -759,6 +757,25 @@ local function HeartbeatWorker(deltaTime)
 	end
 end
 
+
+
+local function SerializedPartInstance(p)
+	return {
+		CFrame = p.CFrame,
+		Size = p.Size,
+
+		Color = p.Color,
+		Material = p.Material.Value,
+		Transparency = p.Transparency,
+		Reflectance = p.Reflectance,
+
+		Tags = p:GetTags(),
+		GridSize = p:GetAttribute("GridSize")
+	}
+end
+
+
+
 local function GetMapParts(ID)
 	local tr = ToReset[ID]
 	if not tr then return nil end
@@ -766,20 +783,7 @@ local function GetMapParts(ID)
 	local mapParts = {}
 
 	for _, dirtied in ipairs(tr) do
-		local p = dirtied.Part
-
-		table.insert(mapParts, {
-			CFrame = p.CFrame,
-			Size = p.Size,
-
-			Color = p.Color,
-			Material = p.Material.Value,
-			Transparency = p.Transparency,
-			Reflectance = p.Reflectance,
-
-			Tags = p:GetTags(),
-			GridSize = p:GetAttribute("GridSize")
-		})
+		table.insert(mapParts, SerializedPartInstance(dirtied.Part))
 	end
 
 	return mapParts
@@ -807,7 +811,7 @@ local function CreateReplicatedMapParts(ID, mapParts)
 
 		Part.Parent = clientMapFolder
 
-		MarkDirty(ID, Part)
+		if ID then MarkDirty(ID, Part) end
 	end
 end
 
@@ -845,6 +849,7 @@ local function ReplicateImaginaryFromServer(params, mapParts)
 
 	dParams.replicated = true
 
+	RunService.Heartbeat:Wait()
 	DivQueue = {}
 	ImaginaryVoxels(dParams)
 end
@@ -908,8 +913,14 @@ end
 
 
 local function ReplicateMapToNewPlayer(plr)
-	local toReplicate = {}
+	local visitiedIDs = {}
+	local replicatedDirties = {}
+	local replicatedResets = {}
+
+	local filterDesc = {}
+
 	for ID, dirtied in pairs(opDirties) do
+		visitiedIDs[ID] = true
 		local serialDirties = {}
 		for _, dirty in ipairs(dirtied) do
 			local serialChildren = {}
@@ -919,6 +930,7 @@ local function ReplicateMapToNewPlayer(plr)
 					Size = p.Size,
 				})
 			end
+			table.insert(filterDesc, dirty.model)
 			local p = dirty.Part
 			local serialDirtied = {}
 			serialDirtied.OriginalPart = { CFrame = p.CFrame, Size = p.Size }
@@ -931,19 +943,32 @@ local function ReplicateMapToNewPlayer(plr)
 			serialDirties.Reflectance = p.Reflectance
 			table.insert(serialDirties, serialDirtied)
 		end
-		table.insert(toReplicate, {
+		table.insert(replicatedDirties, {
 			ID = ID,
 			Dirties = serialDirties
 		})
 	end
 
-	if #toReplicate == 0 then return end
+	local overlapParams = OverlapParams.new()
+	overlapParams.FilterType = Enum.RaycastFilterType.Include
+	overlapParams.FilterDescendantsInstances = filterDesc
 
-	ServerEvents.ReplicateOpDirties.Fire(plr, toReplicate)
+	for ID, toReset in pairs(ToReset) do
+		if visitiedIDs[ID] then continue end
+
+		for _, dirtied in ipairs(toReset) do
+			if #workspace:GetPartsInPart(dirtied.Part, overlapParams) > 0 then continue end
+			table.insert(replicatedResets, SerializedPartInstance(dirtied.Part))
+		end
+	end
+
+	if #replicatedDirties == 0 and #replicatedResets == 0 then return end
+
+	ServerEvents.ReplicateMap.Fire(plr, replicatedDirties, replicatedResets)
 end
 
 
-local function ReplicateMapFromServer(SerialOpDirties)
+local function ReplicateMapFromServer(SerialOpDirties, mapParts)
 
 	for _, serialOpDirty in ipairs(SerialOpDirties) do
 		local dirtied = {}
@@ -961,7 +986,7 @@ local function ReplicateMapFromServer(SerialOpDirties)
 			replicatedOriginal.Color = C
 			replicatedOriginal.Material = M
 			replicatedOriginal.Transparency = T
-			replicatedOriginal.Reflectance = R
+			replicatedOriginal.Reflectance = R or 0
 			replicatedOriginal:SetAttribute("GridSize", serialDirtied.GridSize)
 
 			local model = Instance.new("Model");
@@ -981,7 +1006,7 @@ local function ReplicateMapFromServer(SerialOpDirties)
 				Part.Color = C
 				Part.Material = M
 				Part.Transparency = T
-				Part.Reflectance = R
+				Part.Reflectance = R or 0
 				Part.Parent = model
 			end
 
@@ -991,6 +1016,8 @@ local function ReplicateMapFromServer(SerialOpDirties)
 
 		opDirties[serialOpDirty.ID] = dirtied
 	end
+
+	CreateReplicatedMapParts(nil, mapParts)
 end
 
 
@@ -1007,6 +1034,7 @@ function Shatterbox.Puppeteer(voxel : Part)
 	assert(isServer, "This function can only be called from the server")
 
 	voxel:AddTag(IndestructibleTag)
+	if not voxel.Anchored then voxel:SetNetworkOwner(nil) end
 	voxel.Parent = workspace.CurrentCamera
 
 	local noSleepCon : RBXScriptConnection
@@ -1103,7 +1131,9 @@ function Shatterbox.Destroy(intersectingPart : Part | Model | Types.DestructionP
 end
 
 
--- Instantly performs voxel destruction around 'intersectingPart', skipping as many intermediate parts as possible. <br>
+--*Yields until the NEXT Heartbeat to perform instant destruction.* <br>
+--
+--Performs voxel destruction around 'intersectingPart', skipping as many intermediate parts as possible. <br>
 --
 -- Returns an array of imaginary voxels for you to optionally create as debris.
 function Shatterbox.ImaginaryVoxels(intersectingPart : Part | Model | Types.DestructionParams, FilterTagged : (string | {string})?, CleanupDelay : number?, GridSize : number?, SkipEncapsulatedVoxels : boolean?, destroyIntersectingPart : boolean?) : {Types.ImaginaryVoxel}
@@ -1140,6 +1170,7 @@ function Shatterbox.ImaginaryVoxels(intersectingPart : Part | Model | Types.Dest
 		ReplicateImaginaryToClients(params)
 	end
 
+	RunService.Heartbeat:Wait()
 	DivQueue = {}
 	return ImaginaryVoxels(params)
 end
@@ -1202,6 +1233,8 @@ function Shatterbox.CreateHitbox()
 	-- Performs voxel destruction around the hitbox
 	function hitbox:Destroy() Shatterbox.Destroy(hitbox) end
 
+	--*Yields until the NEXT Heartbeat to perform instant destruction.* <br>
+	--
 	-- returns the imaginary voxels bounded by the hitbox as an array, for you to optionally create
 	function hitbox:ImaginaryVoxels() return Shatterbox.ImaginaryVoxels(hitbox) :: {Types.ImaginaryVoxel} end
 
@@ -1329,7 +1362,7 @@ elseif isClient then
 		ClientEvents.SignalClearQueue.On(Shatterbox.ClearQueue)
 		ClientEvents.SignalReset.On(Shatterbox.Reset)
 
-		ClientEvents.ReplicateOpDirties.On(ReplicateMapFromServer)
+		ClientEvents.ReplicateMap.On(ReplicateMapFromServer)
 		ClientEvents.ReplicateDestruction.On(ReplicateDestructionFromServer)
 		ClientEvents.ReplicateImaginary.On(ReplicateImaginaryFromServer)
 	end
