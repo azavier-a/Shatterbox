@@ -1,0 +1,7 @@
+<h1>CreateHitbox() : hitbox</h1>
+
+<p>
+Creates a "Hitbox" object which can be used in place of the destruction functions and has additional functionality, similar to the VoxBreaker moveable hitbox. 
+
+See the Hitbox tutorial for more information.
+</p>

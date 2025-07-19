@@ -1,3 +1,40 @@
-p {
+* {
+    box-sizing: border-box;
+    
+    margin: 0;
+    padding: 0;
+}
+
+
+
+header {
+    position: absolute;
+
+    width: 100vw;
+    height: 10vh;
+
     background-color: black;
+}
+
+
+main {
+    position: absolute;
+
+    width: 80vw;
+    height: 90vh;
+
+    top: 10vh;
+    left: 20vw;
+    background-color: aqua;
+}
+
+
+#explorer-div {
+    position: absolute;
+
+    height: 90vh;
+    width: 20vw;
+
+    top: 10vh;
+    background-color: brown;
 }

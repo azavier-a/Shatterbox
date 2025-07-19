@@ -1,0 +1,7 @@
+<h1>ImaginaryVoxels() : {{CFrame : CFrame, Size : Vector3, Original : Part, DirtyParent : Model, GridSize : number, isEdge : boolean}}</h1>
+
+<p>
+Yields until the *next* Heartbeat. Then instantly performs "imaginary" voxel destruction according to the parameters you supply.
+
+Returns an array of imaginary voxels for you to optionally create.
+</p>

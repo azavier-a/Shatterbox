@@ -1,0 +1,15 @@
+[
+    {
+        "Reference" : "CreateHitbox",
+        "Children" : [
+            {
+                "Label" : "Properties",
+                "Children" : [
+                    {"Reference" : "CleanupDelay"}
+                ]
+            },
+            {"Reference" : "ImaginaryVoxels"}
+        ]
+    },
+    {"Reference" : "ImaginaryVoxels"}
+]
