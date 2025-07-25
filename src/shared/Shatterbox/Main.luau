@@ -940,7 +940,7 @@ local function ReplicateMapToNewPlayer(plr)
 			serialDirtied.Color = p.Color
 			serialDirtied.Material = p.Material.Value
 			serialDirtied.Transparency = p.Transparency
-			serialDirties.Reflectance = p.Reflectance
+			serialDirtied.Reflectance = p.Reflectance
 			table.insert(serialDirties, serialDirtied)
 		end
 		table.insert(replicatedDirties, {
