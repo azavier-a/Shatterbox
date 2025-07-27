@@ -1,6 +1,14 @@
 --!native
 --!optimize 2
 
+local EPSILON = 1e-6
+
+local localAxisVectors = { X = "RightVector", Y = "UpVector", Z = "ZVector" }
+
+local axisID = {"X", "Y", "Z"}
+
+
+
 local PartTypeContainsPoint = {}
 
 PartTypeContainsPoint.Ball = function(cframe : CFrame, size : Vector3, p : Vector3)
@@ -49,47 +57,148 @@ PartTypeContainsPoint.CornerWedge = function(cframe : CFrame, size : Vector3, p 
 	return (absPoint.X <= wsx * 0.5) and (absPoint.Y <= wsy * 0.5) and (absPoint.Z <= wsz * 0.5) and (localPoint.Y * wsz <= localPoint.Z * -wsy) and (localPoint.Y * wsx <= localPoint.X * wsy)
 end
 
-local unit_cube_verts = {}
 
-for X = -0.5, 0.5  do
-    for Y = -0.5, 0.5 do
-        for Z = -0.5, 0.5 do
-            table.insert(unit_cube_verts, Vector3.new(X, Y, Z))
+
+local GetVerts = {}
+
+GetVerts.Block = function(cframe : CFrame, size : Vector3)
+    local lx, ly, lz = cframe.XVector*size.X, cframe.YVector*size.Y, cframe.ZVector*size.Z
+    local ny, nz = -ly, -lz
+    local pnx, plx = cframe.Position - lx, cframe.Position + lx
+    local pnxny, pnxly, plxny, plxly = pnx + ny, pnx + ly, plx + ny, plx + ly
+    return {
+        pnxny + nz,
+        pnxny + lz,
+        pnxly + nz,
+        pnxly + lz,
+        plxny + nz,
+        plxny + lz,
+        plxly + nz,
+        plxly + lz
+    }
+end
+local block_edges = { {1,2}, {1,3}, {1,5}, {2,4}, {2,6}, {3,4}, {3,7}, {4,8}, {5,6}, {5,7}, {6,8}, {7,8} }
+
+GetVerts.Wedge = function(cframe : CFrame, size : Vector3)
+    local lx, ly, lz = cframe.XVector*size.X, cframe.YVector*size.Y, cframe.ZVector*size.Z
+    local ny, nz = -ly, -lz
+    local pnx, plx = cframe.Position - lx, cframe.Position + lx
+    local pnxny, plxny = pnx + ny, plx + ny
+    return {
+        pnxny + nz,
+        pnxny + lz,
+        plxny + nz,
+        plxny + lz,
+        pnx + ly + lz,
+        plx + ly + lz
+    }
+end
+local wedge_edges = { {1,2}, {2,4}, {4,3}, {3,1}, {2,5}, {4,6}, {5,6}, {1,3}, {1,5}, {3,6} }
+
+GetVerts.CornerWedge = function(cframe : CFrame, size : Vector3)
+    local lx, ly, lz = cframe.XVector*size.X, cframe.YVector*size.Y, cframe.ZVector*size.Z
+    local ny, nz = -ly, -lz
+    local pnx, plx = cframe.Position - lx, cframe.Position + lx
+    local pnxny, plxny = pnx + ny, plx + ny
+    return {
+        pnxny + nz,
+        pnxny + lz,
+        plxny + nz,
+        plxny + lz,
+        plx + ly + nz
+    }
+end
+local corner_wedge_edges = { {1,2}, {2,4}, {4,3}, {3,1}, {3,5}, {1,5}, {4,5} }
+
+
+
+local GetNormals = {}
+
+GetNormals.Block = function(cframe : CFrame)
+    local lx, ly, lz = cframe.XVector, cframe.YVector, cframe.ZVector
+    return {
+        -lx, lx,
+        -ly, ly,
+        -lz, lz
+    }
+end
+
+GetNormals.Wedge = function(cframe : CFrame, size : Vector3)
+    local lx, ly, lz = cframe.XVector, cframe.YVector, cframe.ZVector
+    return {
+        -cframe.YVector,
+        (lz*size.Y - ly*size.Z).Unit,
+        -lz,
+        -lx, lx
+    }
+end
+
+GetNormals.CornerWedge = function(cframe : CFrame, size : Vector3)
+    local lx, ly, lz = cframe.XVector, cframe.YVector, cframe.ZVector
+    return {
+        -ly,
+        (lz*size.Y - lx*size.X).Unit,
+        (ly*size.Z + lz*size.Y).Unit,
+        -lz,
+        lx
+    }
+end
+
+
+
+local function ProjectExtent(verts: {Vector3}, axis: Vector3)
+	local min, max = nil, nil
+    local ax, ay, az = axis.X, axis.Y, axis.Z
+	for _, v in verts do
+		local d = v.X*ax + v.Y*ay + v.Z*az
+        if min then
+            min, max = math.min(min, d), math.max(max, d)
+        else
+            min, max = d, d
+        end
+	end
+	return min, max
+end
+
+local function SAT(VA, NA, VB, NB)
+    -- Create candidate axis array and indexer
+    local candidates, n = table.create(#NA + #NB + #NA*#NB), 0
+
+    -- Populate candidate axis
+    for _, a in ipairs(NA) do
+        n += 1
+		candidates[n] = a
+
+        local ax, ay, az = a.X, a.Y, a.Z
+        for _, b in ipairs(NB) do
+            n += 1
+            candidates[n] = b
+
+            local bx, by, bz = b.X, b.Y, b.Z
+            local cross = Vector3.new(
+                ay*bz - az*by,
+                az*bx - ax*bz,
+                ax*by - ay*bx
+            )
+            if cross.Magnitude > EPSILON then
+                n += 1
+                candidates[n] = cross.Unit
+            end
         end
     end
-end
 
-local unit_cube_edges = { {1,2}, {1,3}, {1,5}, {2,4}, {2,6}, {3,4}, {3,7}, {4,8}, {5,6}, {5,7}, {6,8}, {7,8} }
+    -- SAT test on all candidate axes
+    for _, axis in candidates do
+        local min1, max1 = ProjectExtent(VA, axis)
+        local min2, max2 = ProjectExtent(VB, axis)
 
-
-local function GetBlockPartVertices(cframe : CFrame, size : Vector3)
-
-	local vertices = {}
-
-	for _, vert in ipairs(unit_cube_verts) do
-        table.insert(vertices, vert*size)
+        if max1 < min2 or max2 < min1 then
+            return false -- Separating axis found
+        end
     end
 
-	return table.pack(cframe:PointToWorldSpace(unpack(vertices)))
+    return true -- No separating axis found
 end
-
-
-local function PartEncapsulatesBlockPart(part : Part, blockCFrame : CFrame, blockSize : Vector3)
-
-	local PartContainsPoint = PartTypeContainsPoint[part.Shape.Name]
-	local partSize = part.Size
-	local partCFrame = part.CFrame
-
-	for _, vert in ipairs(GetBlockPartVertices(blockCFrame, blockSize)) do
-
-		if PartContainsPoint(partCFrame, partSize, vert) then continue end
-
-		return false
-	end
-
-	return true
-end
-
 
 local function PartContainsAllVerts(part : Part, verts : {Vector3})
 
@@ -98,15 +207,17 @@ local function PartContainsAllVerts(part : Part, verts : {Vector3})
 	local partCFrame = part.CFrame
 
 	for _, vert in ipairs(verts) do
-
 		if PartContainsPoint(partCFrame, partSize, vert) then continue end
-
 		return false
 	end
 
 	return true
 end
 
+local function PartEncapsulatesBlockPart(part : Part, blockCFrame : CFrame, blockSize : Vector3)
+
+	return PartContainsAllVerts(part, GetVerts.Block(blockCFrame, blockSize))
+end
 
 local function PartContainsAVert(part : Part, verts : {Vector3})
 
@@ -122,127 +233,9 @@ local function PartContainsAVert(part : Part, verts : {Vector3})
 	return false
 end
 
-
-
-local axisID = {"X", "Y", "Z"}
-local function SegmentIntersectsOBB(p0: Vector3, p1: Vector3, boxCFrame : CFrame, boxSize : Vector3): boolean
-    local halfSize = boxSize * 0.5
-    local lP0 = boxCFrame:PointToObjectSpace(p0)
-    local dir = boxCFrame:PointToObjectSpace(p1) - lP0
-
-    for _, axis in ipairs(axisID) do
-        local min = -halfSize[axis]
-        local max = halfSize[axis]
-        local p0a = lP0[axis]
-        local da = dir[axis]
-
-        if math.abs(da) < 1e-8 and (p0a < min or p0a > max) then
-            return false
-		end
-
-		da = 1 / da
-		local t1 = (min - p0a) * da
-		local t2 = (max - p0a) * da
-		local tmin = math.max(0, math.min(t1, t2))
-		local tmax = math.min(1, math.max(t1, t2))
-		if tmin > tmax then return false end
-    end
-
-    return true
-end
-
-
-
-local function SegmentIntersectsCylinder(L1, L2, C1, C2, radius)
-    local EPSILON = 1e-6
-
-    local Ca = C2 - C1 -- cylinder axis
-    local d = L2 - L1 -- segment direction
-    local m = L1 - C1
-    local n = Ca.Unit
-
-    -- Components perpendicular to the cylinder axis
-    local md = m - n * m:Dot(n)
-    local dd = d - n * d:Dot(n)
-
-    local a = dd:Dot(dd)
-    local b = 2 * dd:Dot(md)
-    local c = md:Dot(md) - radius * radius
-
-    local discriminant = b * b - 4 * a * c
-    if discriminant < 0 then
-        return false -- No real roots; no intersection with infinite cylinder
-    end
-
-    -- Solve quadratic for t values (along segment)
-    local sqrtDisc = math.sqrt(discriminant)
-    local t1 = (-b - sqrtDisc) / (2 * a)
-    local t2 = (-b + sqrtDisc) / (2 * a)
-
-    -- Clamp t1 and t2 to [0,1] range
-    local function isInsideSegment(t)
-        return t >= 0 - EPSILON and t <= 1 + EPSILON
-    end
-
-    for _, t in ipairs({t1, t2}) do
-        if isInsideSegment(t) then
-            local point = L1 + d * t
-            local projLength = (point - C1):Dot(n)
-            local axisLength = Ca.Magnitude
-            if projLength >= 0 - EPSILON and projLength <= axisLength + EPSILON then
-                return true -- Intersects within the finite cylinder
-            end
-        end
-    end
-
-    return false -- No valid intersection found
-end
-
-
-local function PlaneIntersectsCylinder(P: Vector3, S: Vector2, U: Vector3, V: Vector3, C0: Vector3, C1: Vector3, radius: number): boolean
-    local N = U:Cross(V).Unit
-    local Vcyl = C1 - C0
-    local lenCyl = Vcyl.Magnitude
-    if lenCyl < 1e-8 then return false end
-    local VcylUnit = Vcyl.Unit
-
-    local d0 = N:Dot(C0 - P)
-    local d1 = N:Dot(C1 - P)
-
-    if d0 > radius and d1 > radius then return false end
-    if d0 < -radius and d1 < -radius then return false end
-
-    local denom = N:Dot(VcylUnit)
-    local t: number
-    if math.abs(denom) < 1e-8 then
-        t = 0.5 * lenCyl
-    else
-        t = -N:Dot(C0 - P) / denom
-    end
-
-    if t < 0 or t > lenCyl then return false end
-
-    local P_axis = C0 + VcylUnit * t
-    local d = P_axis - P
-    local u = d:Dot(U)
-    local v = d:Dot(V)
-
-    return math.abs(u) <= S.X + radius and math.abs(v) <= S.Y + radius
-end
-
-
-
-
-local localAxisVectors = { X = "RightVector", Y = "UpVector", Z = "ZVector" }
-
-
-
-
-local PartTypeIntersectsOBB = {}
-
-PartTypeIntersectsOBB.Ball = function(sphere: Part, boxCFrame : CFrame, boxSize : Vector3): boolean
-    local radius = math.min(sphere.Size.X, sphere.Size.Y, sphere.Size.Z) * 0.5
-    local localCenter = boxCFrame:Inverse() * sphere.Position
+local function BallIntersectsBlock(sphereCFrame, sphereSize, boxCFrame : CFrame, boxSize : Vector3)
+	local radius = math.min(sphereSize.X, sphereSize.Y, sphereSize.Z) * 0.5
+    local localCenter = boxCFrame:Inverse() * sphereCFrame.Position
     local halfSize = boxSize * 0.5
 
     local clamped = Vector3.new(
@@ -254,48 +247,140 @@ PartTypeIntersectsOBB.Ball = function(sphere: Part, boxCFrame : CFrame, boxSize 
     return (localCenter - clamped).Magnitude <= radius
 end
 
+local function SegmentIntersectsCylinder(L1, L2, C1, C2, radius)
 
-PartTypeIntersectsOBB.Cylinder = function(cylinder: Part, boxCFrame : CFrame, boxSize : Vector3, vertices): boolean
-	local cf = cylinder.CFrame
-	local hsa = cf.RightVector * cylinder.Size.X * 0.5
-	local p = cf.Position
-	local bp = boxCFrame.Position
-	local c0, c1 = p + hsa, p - hsa
-	local radius = math.min(cylinder.Size.Y, cylinder.Size.Z)
+    local Ca = C2 - C1
+    if Ca.Magnitude < EPSILON then return false end
+    local n = Ca.Unit
 
-	for _, seg in ipairs(unit_cube_edges) do
-		if SegmentIntersectsCylinder(vertices[seg[1]], vertices[seg[2]], c0, c1, radius) then return true end
-	end
+    local d = L2 - L1
+    local m = L1 - C1
 
-	for i, a in ipairs(axisID) do
-		local la = localAxisVectors[a]
-		local sf = table.clone(axisID)
-		table.remove(sf, i)
+    local md = m - n * m:Dot(n)
+    local dd = d - n * d:Dot(n)
 
-		local UA, VA = sf[1], sf[2]
-		local ULA, VLA = localAxisVectors[UA], localAxisVectors[VA]
-		local S = Vector2.new(boxSize[UA], boxSize[VA]) * 0.5
+    local a = dd:Dot(dd)
+    local b = 2 * dd:Dot(md)
+    local c = md:Dot(md) - radius * radius
 
-		local CLA = cf[la]
-		local lcf = boxCFrame[la] * boxSize[a] * 0.5
+    if math.abs(a) < EPSILON then
+        -- d parallel to cylinder axis or nearly so
+        local projL1 = (L1 - C1):Dot(n)
+        local radialL1 = (L1 - C1 - n * projL1).Magnitude
+        local projL2 = (L2 - C1):Dot(n)
+        local radialL2 = (L2 - C1 - n * projL2).Magnitude
 
-		if PlaneIntersectsCylinder(bp + lcf, S, CLA, c0, c1, radius) then return true end
-		if PlaneIntersectsCylinder(bp - lcf, S, CLA, c0, c1, radius) then return true end
-	end
+        local axisLen = Ca.Magnitude
 
-	return false
+        if projL1 >= -EPSILON and projL1 <= axisLen + EPSILON and radialL1 <= radius + EPSILON then return true end
+        if projL2 >= -EPSILON and projL2 <= axisLen + EPSILON and radialL2 <= radius + EPSILON then return true end
+
+        return false
+    end
+
+    local discriminant = b * b - 4 * a * c
+    if discriminant < 0 then return false end
+
+    local sqrtDisc = math.sqrt(discriminant)
+    local t1 = (-b - sqrtDisc) / (2 * a)
+    local t2 = (-b + sqrtDisc) / (2 * a)
+
+    if t1 >= 0 - EPSILON and t1 <= 1 + EPSILON then
+        local point = L1 + d * t1
+        local projLength = (point - C1):Dot(n)
+        local axisLength = Ca.Magnitude
+        if projLength >= 0 - EPSILON and projLength <= axisLength + EPSILON then
+            return true
+        end
+    end
+
+    if t2 >= 0 - EPSILON and t2 <= 1 + EPSILON then
+        local point = L1 + d * t2
+        local projLength = (point - C1):Dot(n)
+        local axisLength = Ca.Magnitude
+        if projLength >= 0 - EPSILON and projLength <= axisLength + EPSILON then
+            return true
+        end
+    end
+
+    return false
+end
+
+local function PlaneIntersectsCylinder(P, S, U, V, C0, C1, radius)
+    local N = U:Cross(V).Unit
+    local Ca = C1 - C0
+    local axisLen = Ca.Magnitude
+    if axisLen < 1e-6 then return false end
+
+    local CaUnit = Ca / axisLen
+    local d0 = (C0 - P):Dot(N)
+    local d1 = (C1 - P):Dot(N)
+
+    if d0 > radius and d1 > radius then return false end
+    if d0 < -radius and d1 < -radius then return false end
+
+    local function ProjectOntoPlane(Q)
+        local toQ = Q - P
+        return Vector2.new(toQ:Dot(U), toQ:Dot(V))
+    end
+
+    local q0 = ProjectOntoPlane(C0)
+    local q1 = ProjectOntoPlane(C1)
+    local axis2D = q1 - q0
+    local center = (q0 + q1) * 0.5
+
+    local dir = axis2D.Unit
+    local halfLen = (axis2D.Magnitude * 0.5)
+
+    -- radius projects orthogonal to Ca axis in the plane only
+    local orthogonalU = (U - CaUnit * U:Dot(CaUnit)).Unit
+    local orthogonalV = (V - CaUnit * V:Dot(CaUnit)).Unit
+
+    local radiusU = radius * orthogonalU.Magnitude
+    local radiusV = radius * orthogonalV.Magnitude
+
+    local px = math.abs(center.X)
+    local py = math.abs(center.Y)
+    local dx = math.abs(dir.X) * halfLen + radiusU
+    local dy = math.abs(dir.Y) * halfLen + radiusV
+
+    return px <= S.X + dx and py <= S.Y + dy
+end
+
+local function CylinderIntersectsBlock(cylinderCFrame, cylinderSize, cylinderBoxVerts, cylinderBoxNormals, boxCFrame, boxSize, boxVerts, boxNormals)
+
+    local halfAxis = cylinderCFrame.RightVector * (cylinderSize.X * 0.5)
+    local p = cylinderCFrame.Position
+    local c0, c1 = p - halfAxis, p + halfAxis
+    local radius = 0.5 * math.min(cylinderSize.Y, cylinderSize.Z)
+
+    for _, seg in ipairs(block_edges) do
+        if SegmentIntersectsCylinder(boxVerts[seg[1]], boxVerts[seg[2]], c0, c1, radius) then return true end
+    end
+
+	if not SAT(cylinderBoxVerts, cylinderBoxNormals, boxVerts, boxNormals) then return false end
+
+    for i, a in ipairs(axisID) do
+        local la = localAxisVectors[a]
+        local lcf = boxCFrame[la] * boxSize[a] * 0.5
+
+        local sf = table.clone(axisID)
+        table.remove(sf, i)
+
+        local UA, VA = sf[1], sf[2]
+        local S = Vector2.new(boxSize[UA], boxSize[VA]) * 0.5
+
+        local U, V = boxCFrame[localAxisVectors[UA]], boxCFrame[localAxisVectors[VA]]
+
+        if PlaneIntersectsCylinder(boxCFrame.Position + lcf, S, U, V, c0, c1, radius) then return true end
+        if PlaneIntersectsCylinder(boxCFrame.Position - lcf, S, U, V, c0, c1, radius) then return true end
+    end
+
+    return false
 end
 
 
-local function PartIntersectsOBB(Part : Part, obbCFrame : CFrame, obbSize : Vector3)
-
-	return PartTypeIntersectsOBB[Part.Shape.Name](Part, obbCFrame, obbSize, GetBlockPartVertices(obbCFrame, obbSize))
-end
-
-
-
-
-
+-- subdivision functions
 
 type PartType = {CFrame : CFrame, Size : Vector3}
 
@@ -366,24 +451,26 @@ end
 
 
 
-
 local VertexMath = {}
 
-VertexMath.PartEncapsulatesBlockPart = PartEncapsulatesBlockPart
+VertexMath.GetVerts = GetVerts
 
-VertexMath.GetBlockPartVertices = GetBlockPartVertices
+VertexMath.GetNormals = GetNormals
+
+VertexMath.SAT = SAT
+
+VertexMath.PartEncapsulatesBlockPart = PartEncapsulatesBlockPart
 
 VertexMath.PartContainsAllVerts = PartContainsAllVerts
 
 VertexMath.PartContainsAVert = PartContainsAVert
 
-VertexMath.PartIntersectsOBB = PartIntersectsOBB
+VertexMath.BallIntersectsBlock = BallIntersectsBlock
 
+VertexMath.CylinderIntersectsBlock = CylinderIntersectsBlock
 
 VertexMath.MOTS = MOTS
 
 VertexMath.KDS = KDS
-
-
 
 return VertexMath

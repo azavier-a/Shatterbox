@@ -52,7 +52,8 @@ ServerEffects.BumpyFloorBreakWalls = function(voxel, dirtyParent, cuttingPart, i
     raycastParams.FilterType = Enum.RaycastFilterType.Include
     raycastParams.FilterDescendantsInstances = { castTo }
 
-    local hitResult = workspace:Raycast(cuttingPart.Position, voxel.Position - cuttingPart.Position, raycastParams)
+    local O = cuttingPart.CFrame.Position
+    local hitResult = workspace:Raycast(O, voxel.Position - O, raycastParams)
 
     castTo.Parent = nil -- the return value of GetOriginalPart is cached and automatically deleted after 5 seconds
 

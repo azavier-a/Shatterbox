@@ -2,7 +2,7 @@
 --!optimize 2
 
 
--- Shatterbox release 7.7
+-- Shatterbox release 7.8 beta
 
 
 --#selene: allow(multiple_statements)
@@ -71,7 +71,11 @@ Settings.UseSmoothCleanup = true
 
 --Settings.DynamicResetDelay = 3
 
-Settings.MaxDivisionsPerFrame = 100
+Settings.MaxDivisionsPerFrame = 300
+
+--Settings.ImaginaryCreatedStaticPartsPerFrame = 200
+
+--Settings.ImaginaryDestroyedStaticsPartsPerFrame = 200
 
 Settings.DefaultSmoothCleanupDelay = 60
 
@@ -96,6 +100,7 @@ Settings.SkipInstanceCheck = function(i : Instance)
 	return false
 end
 
+--local ObjectCache = require(lib:WaitForChild("ObjectCache"))
 
 
 local ClientEvents, ServerEvents, clientMapFolder, tmpFolder
@@ -119,7 +124,7 @@ end
 
 
 
--- The ShatterboxTemporary folder, which contains things like debris (but also sometimes CuttingParts for a single frame)
+-- The ShatterboxTemporary folder, which contains things like debris
 tmpFolder = workspace:FindFirstChild("ShatterboxTemporary") or Instance.new("Folder")
 tmpFolder.Parent = workspace
 tmpFolder.Name = "ShatterboxTemporary"
@@ -176,12 +181,12 @@ end
 local CollectionService = game:GetService("CollectionService")
 local TweenService = game:GetService("TweenService")
 local HttpService = game:GetService("HttpService")
-local Players = game:GetService("Players")
 
 local VertexMath = require(lib:WaitForChild("VertexMath"))
 local TaggedArray = require(script.Parent:WaitForChild("util"):WaitForChild("TaggedArray"))
 local PartEncapsulatesBlockPart = VertexMath.PartEncapsulatesBlockPart
-local GetBlockPartVertices = VertexMath.GetBlockPartVertices
+local GetVerts, GetNormals = VertexMath.GetVerts, VertexMath.GetNormals
+local BlockVerts, BlockNormals = GetVerts.Block, GetNormals.Block
 local PartContainsAVert, PartContainsAllVerts = VertexMath.PartContainsAVert, VertexMath.PartContainsAllVerts
 
 local SubdivideFunctions = {
@@ -200,13 +205,21 @@ local opDirties = {} :: {
 }
 
 local ShatterQueue = {} :: { Types.DestructionParams }
-local DivQueue = {}
 local frameDivs = 0
 
 local Puppets = {} :: { [string] : Part }
 local CreatePuppetQueue = {}
 
+--[[
+local ImaginaryCreateQueue = {} :: { Types.ImaginaryBox }
+local ImaginaryWorkQueue = {} :: { Types.ImaginaryBox }
+local ImaginaryDestroyQueue = {} :: { Part }
+--]]
+
 local ToReset = {} :: { [string] : {{Part : Part, OriginalParent : Instance, model : Model}}}
+
+-- pre-allocated part instance which is used to get the parts whenever `GetPartsInPart` is needed
+local IntersectingPart = Instance.new("Part")
 
 --local activeReset = false
 --local lastOpTick = nil
@@ -253,27 +266,45 @@ local function OverlapParamsOfTagged(tags : { string }, instant) : OverlapParams
 end
 
 
+--I wonder if anyone has done this before.
+--
+-- Voxelizes a part (or imaginary part) completely according to the GridSize supplied. Returns an array of imaginary box parts.
+-- Very efficient, as opposed to the previous recursive logic. The returned table is created with proper allocation size using `table.create`.
 local function ImaginaryVoxelize(part, GridSize)
 
 	GridSize = GridSize or Settings.DefaultGridSize
 
-	local imaginaryParts = {}
+	local PartSize = part.Size
+	local psx, psy, psz = PartSize.X, PartSize.Y, PartSize.Z
 
-	local dividing = { part }
+	local NDX, NDY, NDZ = math.max(0, math.floor(-math.log(GridSize / psx, 2))),
+						  math.max(0, math.floor(-math.log(GridSize / psy, 2))),
+						  math.max(0, math.floor(-math.log(GridSize / psz, 2)))
 
-	while #dividing > 0 do
+	local DDX, DDY, DDZ = NDX > 0, NDY > 0, NDZ > 0
+	if not (DDX or DDY or DDZ) then return {} end
+	local NVX, NVY, NVZ = 2^NDX, 2^NDY, 2^NDZ
 
-		local toDivide = table.remove(dividing)
-		local s = toDivide.Size
-		local sx, sy, sz = s.X, s.Y, s.Z
-		local Subdivide = SubdivideFunctions[(math.max(sx, sy, sz) > 2 * math.min(sx, sy, sz)) and "KD" or "MOT"]
+	local imaginaryParts, index = table.create(NVX*NVY*NVZ), 0
 
-		local dividedParts = Subdivide(toDivide, GridSize)
+	local npsx, npsy, npsz = psx*(0.5^NDX), psy*(0.5^NDY), psz*(0.5^NDZ)
 
-		if dividedParts then 
-			table.move(dividedParts, 1, #dividedParts, #dividing + 1, dividing)
-		else
-			table.insert(imaginaryParts, toDivide)
+	local cframe = part.CFrame
+	local lx, ly, lz = cframe.XVector, cframe.YVector, cframe.ZVector
+	local O = cframe - lx*npsx*(0.5*NVX - 0.5) - ly*npsy*(0.5*NVY - 0.5) - lz*npsz*(0.5*NVZ - 0.5)
+	local S = Vector3.new(npsx, npsy, npsz)
+
+	for X = 1, NVX do
+		local dx = (X - 1)*lx*npsx
+		for Y = 1, NVY do
+			local dy = (Y - 1)*ly*npsy
+			for Z = 1, NVZ do
+				index += 1
+				imaginaryParts[index] = {
+					CFrame = O + dx + dy + (Z - 1)*lz*npsz,
+					Size = S
+				}
+			end
 		end
 	end
 
@@ -301,7 +332,6 @@ local function UndoDirtyOp(ID : string, replicated : boolean?)
 	local found
 	for i, v in ipairs(ShatterQueue) do
 		if v.ID ~= ID then continue end
-		v.CuttingPart:Destroy()
 		found = i;
 		break
 	end
@@ -312,6 +342,18 @@ local function UndoDirtyOp(ID : string, replicated : boolean?)
 		restored.Parent = dirtied.model.Parent
 		dirtied.model:Destroy()
 	end
+
+	--[[
+	local processed = {}
+	while #ImaginaryCreateQueue > 0 do
+		local v = table.remove(ImaginaryCreateQueue)
+		if v.DestructionID == ID then
+			continue
+		end
+		table.insert(processed, v)
+	end
+	ImaginaryCreateQueue = processed
+	--]]
 
 	--[[
 	if isServer then
@@ -378,7 +420,11 @@ local function MarkDirty(ID, Part : Part)
 			OriginalParent = PartParent,
 			model = model
 		})
+
+		return true
 	end
+
+	return false
 end
 
 
@@ -402,206 +448,138 @@ local function GetDestructibleParts(ID, cuttingPart, filterTagged, instant, repl
 		else
 			defaultOverlapParams
 
-	local op = cuttingPart.Parent
-	cuttingPart.Parent = tmpFolder
-	for _, part in ipairs( workspace:GetPartsInPart(cuttingPart, overlapParams) ) do
+	IntersectingPart.CFrame = cuttingPart.CFrame
+	IntersectingPart.Size = cuttingPart.Size
+	IntersectingPart.Shape = cuttingPart.Shape
+
+	for _, part in ipairs( workspace:GetPartsInPart(IntersectingPart, overlapParams) ) do
 
 		if replicated and not part:IsDescendantOf(clientMapFolder) then continue end
 
 		if ShouldSkipInstance(part) then continue end
 
-		MarkDirty(ID, part) -- adds this part to the smooth cleanup for this destruction, if it's not already destroyed by something else
+		-- adds this part to the smooth cleanup for this destruction, if it's not already destroyed by something else
+		MarkDirty(ID, part)
 
 		table.insert(partsInPart, part)
 	end
-	cuttingPart.Parent = op
 
 	return partsInPart
 end
 
+--[[
+local function GetImaginaryDestructibleParts(cuttingPart, verts, normals) -- I am simply goated
+	local iBa, iC = cuttingPart.Shape.Name == "Ball", cuttingPart.Shape.Name == "Cylinder"
 
--- pops an element from the ShatterQueue, removing the completed operations that it might find before finding one to complete.
-local function PopShatterQueue()
-	local popped, shatterPart, partsInPart
-	local v = table.remove(ShatterQueue)
+	local processed = {}
+	local destructibles = {}
 
-	while v and not popped do
+	while #ImaginaryCreateQueue > 0 do
+		local ivox = table.remove(ImaginaryCreateQueue)
+		local intersected
 
-		shatterPart, partsInPart = v.CuttingPart, {}
-
-		for _, part in ipairs( GetDestructibleParts(v.ID, shatterPart, v.FilterTagged, false, v.replicated) ) do
-
-			if part:HasTag("ShatterboxDebris") then
-				HandleVoxelDestruction(v.OnVoxelDestruct, part, part.Parent, shatterPart, Shatterbox.PartEncapsulatesBlockPart(shatterPart, part), unpack(v.DestructParameters))
-				continue
-			end
-
-			table.insert(partsInPart, part)
-		end
-
-		if #partsInPart == 0 then
-			shatterPart:Destroy()
-			if v.OnDestructCompleted then v.OnDestructCompleted() end
-			v = table.remove(ShatterQueue)
+		if iBa then
+			intersected = VertexMath.BallIntersectsBlock(cuttingPart.CFrame, cuttingPart.Size, ivox.CFrame, ivox.Size)
+		elseif iC then
+			intersected = VertexMath.CylinderIntersectsBlock(cuttingPart.CFrame, cuttingPart.Size, verts, normals, ivox.CFrame, ivox.Size, BlockVerts(ivox.CFrame, ivox.Size), BlockNormals(ivox.CFrame))
 		else
-			popped = v
-			table.insert(ShatterQueue, Settings.UsePriorityQueue and math.max(1, #ShatterQueue + 1 - Settings.PrioritizeRecentN) or 1, popped)
+			intersected = PartContainsAVert(cuttingPart, verts) or VertexMath.SAT(verts, normals, BlockVerts(ivox.CFrame, ivox.Size), BlockNormals(ivox.CFrame))
 		end
+
+		table.insert(intersected and destructibles or processed, ivox)
 	end
 
-	return popped, partsInPart
+	ImaginaryCreateQueue = processed
+
+	return destructibles
 end
+--]]
 
 
--- processes one of the divisions in the DivQueue, returns true if a divison was processed.
-local function SubdivWorker()
-
-	if #DivQueue == 0 then return false end
-
-	local v = table.remove(DivQueue)
-	local Part = v[1]
-	local dirtyParent = Part.Parent
-
-	if not dirtyParent then return true end
-
-	local s = Part.Size
-	local sx, sy, sz = s.X, s.Y, s.Z
-	local Subdivide = SubdivideFunctions[(math.max(sx, sy, sz) > 2 * math.min(sx, sy, sz)) and "KD" or "MOT"]
-
-	frameDivs += 1
-
-	local created = Subdivide(Part, v[2])
-	if not created then
-		HandleVoxelDestruction(v[4], Part, dirtyParent, v[3], true, unpack(v[5]))
-		return true
-	end
-
-	for _, c in ipairs(created) do
-		local instanced = Instance.new("Part")
-		instanced.Transparency = Part.Transparency
-		instanced.Reflectance = Part.Reflectance
-		instanced.Material = Part.Material
-		instanced.Color = Part.Color
-		instanced.Anchored = true
-		instanced.CFrame = c.CFrame
-		instanced.Size = c.Size
-		instanced.Parent = dirtyParent
-	end
-	Part:Destroy()
-
-	return true
-end
-
-
--- processes one of the operations in the ShatterQueue, removing it if the operation is finished. It queues all divisions for this step of the operation.
--- returns true if an operation step was procesed.
-local function ShatterWorker()
-
-	local popped, partsInPart = PopShatterQueue()
-	if not popped then return false end
-
-	local intersectingPart, GridSize, onVoxelDestruct, skipEncapsulatedVoxels = popped.CuttingPart, popped.GridSize, popped.OnVoxelDestruct, popped.SkipEncapsulatedVoxels
-	local canUseEncapsulationChecks = intersectingPart:IsA("Part")
-
-	for _, Part in ipairs(partsInPart) do
-
-		local PartSize = Part.Size
-		local partGridSize = GridSize or Part:GetAttribute("GridSize") or Part.Parent:GetAttribute("GridSize") or Settings.DefaultGridSize
-
-		if canUseEncapsulationChecks and PartEncapsulatesBlockPart(intersectingPart, Part.CFrame, PartSize) then
-
-			if skipEncapsulatedVoxels then Part:Destroy() else
-				local dirtyParent = Part.Parent
-				local destructParams = popped.DestructParameters
-				for _, voxel in ipairs(Shatterbox.Voxelize(Part, partGridSize)) do HandleVoxelDestruction(onVoxelDestruct, voxel, dirtyParent, intersectingPart, false, unpack(destructParams)) end
-			end
-
-		else table.insert(DivQueue, { Part, partGridSize, intersectingPart, onVoxelDestruct, popped.DestructParameters }) end
-	end
-
-	return true
-end
-
-
-local function InsertToShatterQueue(params : Types.DestructionParams)
-
-	table.insert(ShatterQueue, params)
-end
-
-
-local function ImaginaryVoxels(params)
-
+local function ImaginaryVoxels(params, frameLimit, toDestroy)
 	local voxels = {} :: {Types.ImaginaryVoxel}
 
-	local partsInPart, destructibleParts = {}, GetDestructibleParts(params.ID, params.CuttingPart, params.FilterTagged, true, params.replicated)
+	toDestroy = toDestroy or GetDestructibleParts(params.ID, params.CuttingPart, params.FilterTagged, true, params.replicated)
 
-	for _, part in ipairs(destructibleParts) do
-		table.insert(partsInPart, {
+	if #toDestroy == 0 then return voxels end
+
+	local partsInPart = table.create(#toDestroy)
+	for i, part in ipairs(toDestroy) do
+		part.CanQuery = false
+		partsInPart[i] = {
 			CFrame = part.CFrame,
 			Size = part.Size,
-			DirtyParent = part.Parent,
+
 			Original = part,
+			DestructionID = params.ID,
+
+			DirtyParent = part.Parent,
 			GridSize = params.GridSize or part:GetAttribute("GridSize") or part.Parent:GetAttribute("GridSize") or Settings.DefaultGridSize
-		})
+		}
 	end
 
-	if #partsInPart == 0 then
-		if params.destroyIntersectingPart then params.CuttingPart:Destroy() end
+	local cuttingPart = params.CuttingPart
+	local cpcf, cps, cpsh = cuttingPart.CFrame, cuttingPart.Size, cuttingPart.Shape.Name
+	local iBl, iBa, iC = cpsh == "Block", cpsh == "Ball", cpsh == "Cylinder"
 
-		if not params.replicated and Settings.UseSmoothCleanup then task.delay(params.CleanupDelay, UndoDirtyOp, params.ID, params.replicated) end
-
-		return {}
+	local intersectingVerts, intersectingNormals
+	if iBl or iC then
+		intersectingVerts = BlockVerts(cpcf, cps)
+		intersectingNormals = BlockNormals(cpcf)
+	elseif not iBa then
+		intersectingVerts = GetVerts[cpsh](cpcf, cps)
+		intersectingNormals = GetNormals[cpsh](cpcf, cps)
 	end
 
-	local dividing = {} :: {Types.ImaginaryBox}
-
-	-- base dividing step
-	for _, part in ipairs(partsInPart) do
-
-		local s = part.Size
-		local sx,sy,sz = s.X, s.Y, s.Z
-		local minsize, maxsize = math.min(sx, sy, sz), math.max(sx, sy, sz)
-		local Subdivide = SubdivideFunctions[(maxsize > 2 * minsize) and "KD" or "MOT"]
-
-		local isEncapsulated = PartContainsAllVerts(params.CuttingPart, GetBlockPartVertices(part.CFrame, part.Size))
-
-		if params.SkipEncapsulatedVoxels and isEncapsulated then continue end
-
-		local createdParts = Subdivide(part, part.GridSize)
-		if createdParts then
-			local o = part.Original
-			for _, created in ipairs(createdParts) do
-				created.Original = o
-				created.GridSize = part.GridSize
-				created.DirtyParent = part.DirtyParent
-				table.insert(dividing, created)
-			end
-		else
-			part.isEdge = not isEncapsulated
-			table.insert(voxels, part)
-		end
+	--[[
+	local imaginaryDestructibles = GetImaginaryDestructibleParts(cuttingPart, intersectingVerts, intersectingNormals)
+	if #imaginaryDestructibles > 0 then
+		table.move(imaginaryDestructibles, 1, #imaginaryDestructibles, #partsInPart + 1, partsInPart)
 	end
+	--]]
 
-	-- imaginary approximation division step
+	local dividing = partsInPart :: {Types.ImaginaryBox}
+	partsInPart = nil
+
+	local creating = {}
+
+	-- imaginary division step
 	while #dividing > 0 do
 
+		if frameLimit and frameDivs > Settings.MaxDivisionsPerFrame then
+			table.move(dividing, 1, #dividing, #creating + 1, creating)
+			break
+		end
+		if frameLimit then frameDivs += 1 end
+
 		local toDivide = table.remove(dividing)
-		local verts = GetBlockPartVertices(toDivide.CFrame, toDivide.Size)
+		local verts
 
-		local foundVert = PartContainsAVert(params.CuttingPart, verts)
-		if foundVert then
-			table.remove(verts, foundVert)
-			local s, o, gridSize, dirtyParent = toDivide.Size, toDivide.Original, toDivide.GridSize, toDivide.DirtyParent
+		local intersected
 
-			if PartContainsAllVerts(params.CuttingPart, verts) then
+		if iBa then
+			intersected = VertexMath.BallIntersectsBlock(cpcf, cps, toDivide.CFrame, toDivide.Size)
+		elseif iC then
+			verts = BlockVerts(toDivide.CFrame, toDivide.Size)
+			intersected = VertexMath.CylinderIntersectsBlock(cpcf, cps, intersectingVerts, intersectingNormals, toDivide.CFrame, toDivide.Size, verts, BlockNormals(toDivide.CFrame))
+		else
+			verts = BlockVerts(toDivide.CFrame, toDivide.Size)
+			intersected = PartContainsAVert(cuttingPart, verts) or VertexMath.SAT(intersectingVerts, intersectingNormals, verts, BlockNormals(toDivide.CFrame))
+		end
+
+		if intersected then
+			local s, o, gridSize, dirtyParent, destructionID = toDivide.Size, toDivide.Original, toDivide.GridSize, toDivide.DirtyParent, toDivide.DestructionID
+
+			if PartContainsAllVerts(cuttingPart, verts or BlockVerts(toDivide.CFrame, toDivide.Size)) then
 				if params.SkipEncapsulatedVoxels then continue end
-
-				for _, created in ipairs(ImaginaryVoxelize(toDivide, gridSize)) do
+				local createdParts = ImaginaryVoxelize(toDivide, gridSize)
+				for _, created in ipairs(createdParts) do
 					created.Original = o
 					created.GridSize = gridSize
 					created.DirtyParent = dirtyParent
-					table.insert(voxels, created)
+					created.DestructionID = destructionID
 				end
+				table.move(createdParts, 1, #createdParts, #voxels + 1, voxels)
 				continue
 			end
 
@@ -619,98 +597,202 @@ local function ImaginaryVoxels(params)
 					created.Original = o
 					created.GridSize = gridSize
 					created.DirtyParent = dirtyParent
-					table.insert(dividing, created)
+					created.DestructionID = destructionID
 				end
+				table.move(createdParts, 1, #createdParts, #dividing + 1, dividing)
 			else
 				table.insert(voxels, toDivide)
 			end
 		else
-
-			local P = toDivide.Original
-			local newStatic = Instance.new("Part")
-			newStatic.Material = P.Material
-			newStatic.Transparency = P.Transparency
-			newStatic.Reflectance = P.Reflectance
-			newStatic.Color = P.Color
-			newStatic.Anchored = true
-			newStatic.CFrame = toDivide.CFrame
-			newStatic.Size = toDivide.Size
-			newStatic.Parent = toDivide.DirtyParent
+			table.insert(creating, toDivide)
 		end
 	end
 
-	-- destroy original parts
-	for _, p in ipairs(destructibleParts) do p:Destroy() end
+	--[[
+	if #creating > 0 then
+		table.move(creating, 1, #creating, #ImaginaryCreateQueue + 1, ImaginaryCreateQueue)
+	end
 
-	-- recursive step (increase approximation accuracy until convergence)
-	local rvox = ImaginaryVoxels(params)
-	table.move(rvox, 1, #rvox, #voxels + 1, voxels)
+	if #toDestroy > 0 then
+		--table.move(toDestroy, 1, #toDestroy, #ImaginaryDestroyQueue + 1, ImaginaryDestroyQueue)
+	end
+	--]]
+
+	-- create new static parts
+	for _, ibox in ipairs(creating) do
+		local P = ibox.Original
+
+		local newStatic = Instance.new("Part")
+		newStatic.Material = P.Material
+		newStatic.Transparency = P.Transparency
+		newStatic.Reflectance = P.Reflectance
+		newStatic.Color = P.Color
+		newStatic.Anchored = P.Anchored
+		newStatic.CFrame = ibox.CFrame
+		newStatic.Size = ibox.Size
+		newStatic.Parent = ibox.DirtyParent
+	end
+
+	-- destroy original parts
+	for _, part in ipairs(toDestroy) do
+		part:Destroy()
+	end
 
 	return voxels :: {Types.ImaginaryVoxel}
 end
 
 
-local function ValidateDestructionParams(intersectingPart : Part | Model | Types.DestructionParams, FilterTagged : (string | {string})?, CleanupDelay : number?, OnVoxelDestruct : string?, GridSize : number?, SkipEncapsulatedVoxels : boolean?, OnDestructCompleted : (() -> ())?, ... : any)
-	local isTbl = typeof(intersectingPart) == "table"
+-- pops an element from the ShatterQueue, removing the completed operations that it might find before finding one to complete.
+local function PopShatterQueue()
+	local popped, shatterPart, partsInPart
+	local v = table.remove(ShatterQueue)
 
-	local cuttingPart
-	local params = {} :: Types.DestructionParams
-	local iP = {} :: Types.DestructionParams
+	while v and not popped do
 
-	if isTbl then
-		iP = intersectingPart
-		if iP.CuttingPart then
-			cuttingPart = iP.CuttingPart:Clone()
-			params.CFrame = cuttingPart.CFrame
-			params.Size = cuttingPart.Size
-			params.Shape = cuttingPart.Shape
+		shatterPart, partsInPart = v.CuttingPart, {}
+
+		for _, part in ipairs( GetDestructibleParts(v.ID, shatterPart, v.FilterTagged, true, v.replicated) ) do
+
+			if part:HasTag("ShatterboxDebris") then
+				HandleVoxelDestruction(v.OnVoxelDestruct, part, part.Parent, shatterPart, not Shatterbox.PartEncapsulatesBlockPart(shatterPart, part), unpack(v.DestructParameters))
+				continue
+			end
+
+			table.insert(partsInPart, part)
+		end
+
+		if #partsInPart == 0 then
+			if v.OnDestructCompleted then v.OnDestructCompleted() end
+			v = table.remove(ShatterQueue)
 		else
-			local c, s, sh = iP.CFrame, iP.Size, iP.Shape
-			cuttingPart = Instance.new("Part")
-			cuttingPart.CFrame = c
-			cuttingPart.Size = s
-			cuttingPart.Shape = sh
-			params.CFrame, params.Size, params.Shape = c, s, sh
+			popped = v
+			table.insert(ShatterQueue, Settings.UsePriorityQueue and math.max(1, #ShatterQueue + 1 - Settings.PrioritizeRecentN) or 1, popped)
+		end
+	end
+
+	return popped, partsInPart
+end
+
+
+-- processes one of the operations in the ShatterQueue, removing it if the operation is finished. It queues all divisions for this step of the operation.
+-- returns true if an operation step was procesed.
+local function ShatterWorker()
+
+	local popped, partsInPart = PopShatterQueue()
+	if not popped then return false end
+
+	local OnVoxelDestruct, CuttingPart, DestructParameters = popped.OnVoxelDestruct, popped.CuttingPart, popped.DestructParameters
+
+	local ivoxels = ImaginaryVoxels(popped, true, partsInPart)
+	for _, ivoxel in ipairs(ivoxels) do
+		local voxel = ivoxel.Original:Clone()
+		voxel.CFrame = ivoxel.CFrame
+		voxel.Size = ivoxel.Size
+		HandleVoxelDestruction(OnVoxelDestruct, voxel, ivoxel.DirtyParent, CuttingPart, ivoxel.isEdge, unpack(DestructParameters))
+	end
+
+	return true
+end
+
+
+local function ValidateDestructionParams(intersectingPart : Part | Model | Types.Hitbox | Types.DestructionParams | Types.ImaginaryDestructionParams, FilterTagged : (string | {string})?, CleanupDelay : number?, OnVoxelDestruct : string?, GridSize : number?, SkipEncapsulatedVoxels : boolean?, OnDestructCompleted : (() -> ())?, ... : any)
+
+	local CuttingPart = {} :: Types.Hitbox
+	local params = {} :: Types.InternalDestructionParams | Types.InternalImaginaryParams
+	local tbl = {} :: Types.DestructionParams | Types.ImaginaryDestructionParams
+
+	if typeof(intersectingPart) == "table" then
+		tbl = intersectingPart
+		if tbl.CuttingPart then
+			local cp = tbl.CuttingPart
+			if typeof(cp) == "table" or (typeof(cp) == "Instance" and cp:IsA("Part")) then
+				assert(cp.CFrame and cp.Size and cp.Shape, "You must provide a CFrame, Size, and Shape for the '{ CuttingPart : { CFrame : CFrame, Size : Vector3, Shape : Enum.PartType } }' syntax.")
+				CuttingPart.CFrame = cp.CFrame
+				CuttingPart.Size = cp.Size
+				CuttingPart.Shape = cp.Shape
+			end
+		else
+			assert(tbl.CFrame and tbl.Size and tbl.Shape, "You must provide a CFrame, Size, and Shape for the '{ CFrame : CFrame, Size : Vector3, Shape : Enum.PartType }' syntax.")
+			CuttingPart.CFrame = tbl.CFrame
+			CuttingPart.Size = tbl.Size
+			CuttingPart.Shape = tbl.Shape
 		end
 	elseif intersectingPart:IsA("Part") then
-		cuttingPart = intersectingPart:Clone()
-		params.CFrame = intersectingPart.CFrame
-		params.Size = intersectingPart.Size
-		params.Shape = intersectingPart.Shape
+		CuttingPart.CFrame = intersectingPart.CFrame
+		CuttingPart.Size = intersectingPart.Size
+		CuttingPart.Shape = intersectingPart.Shape
 	end
 
-	if cuttingPart then
-		cuttingPart.Anchored = true
-		cuttingPart.CanCollide = false
-		cuttingPart.CanTouch = false
-		cuttingPart.Transparency = 1
-		cuttingPart.Locked = true
-		params.CuttingPart = cuttingPart
+	local filterTagged = tbl.FilterTagged or FilterTagged
+	if filterTagged then
+		if typeof(filterTagged) == "table" then
+			for _, k in pairs(filterTagged) do
+				assert(typeof(k) == "string", "FilterTagged must be an array of strings only")
+			end
+		else
+			assert(typeof(filterTagged) == "string", "FilterTagged must be a string or an array of strings")
+			filterTagged = { filterTagged }
+		end
 	end
 
-	local filterTagged = iP.FilterTagged or FilterTagged
-	if typeof(filterTagged) == "string" then filterTagged = { filterTagged } end
+			   params.CuttingPart = CuttingPart
+			  params.FilterTagged = filterTagged
+			  params.CleanupDelay = tbl.CleanupDelay		   or CleanupDelay   		 or Settings.DefaultSmoothCleanupDelay
+		   params.OnVoxelDestruct = tbl.OnVoxelDestruct 	   or OnVoxelDestruct
+				  params.GridSize = tbl.GridSize 			   or GridSize
+	params.SkipEncapsulatedVoxels = tbl.SkipEncapsulatedVoxels or SkipEncapsulatedVoxels
+	   params.OnDestructCompleted = tbl.OnDestructCompleted    or OnDestructCompleted
+		params.DestructParameters = tbl.DestructParameters     or { ... }
+		       params.finalOpTick = tbl.finalOpTick
+		                params.ID = tbl.ID
 
-			params.FilterTagged = filterTagged
-			  params.CleanupDelay = iP.CleanupDelay			   or CleanupDelay   		     or Settings.DefaultSmoothCleanupDelay
-		    params.OnVoxelDestruct = iP.OnVoxelDestruct 		   or OnVoxelDestruct
-				    params.GridSize = iP.GridSize 				   or GridSize
-	params.SkipEncapsulatedVoxels = iP.SkipEncapsulatedVoxels   or SkipEncapsulatedVoxels
-	  params.OnDestructCompleted = iP.OnDestructCompleted      or OnDestructCompleted
-		params.DestructParameters = iP.DestructParameters     	   or { ... }
-		params.finalOpTick = iP.finalOpTick
-		params.ID = iP.ID
+	assert(typeof(params.CleanupDelay) == "number", "CleanupDelay must be a number.")
+	assert(not params.OnVoxelDestruct or typeof(params.OnVoxelDestruct) == "string", "OnVoxelDestruct must be a string indicating the name of the OnVoxelDestruct callback.")
+	assert(not params.GridSize or typeof(params.GridSize) == "number", "GridSize must be a number.")
+	assert(not params.SkipEncapsulatedVoxels or typeof(params.SkipEncapsulatedVoxels) == "boolean", "SkipEncapsulatedVoxels must be a boolean.")
+	assert(not params.OnDestructCompleted or typeof(params.OnDestructCompleted) == "function", "OnDestructCompleted must be a function.")
+	assert(typeof(params.DestructParameters) == "table", "DestructParameters must be an ARRAY (ordered by increasing number index).")
 
-	return params :: Types.DestructionParams
+	return params :: (Types.InternalImaginaryParams | Types.InternalDestructionParams)
 end
 
 
 local function HeartbeatWorker(deltaTime)
+	--[[
+	local frameCreated = 0
+
+	while #ImaginaryCreateQueue > 0 and frameCreated < Settings.ImaginaryCreatedStaticPartsPerFrame do
+		local ibox = table.remove(ImaginaryCreateQueue)
+		local P = ibox.Original
+
+		local newStatic = Instance.new("Part")
+		newStatic.Material = P.Material
+		newStatic.Transparency = P.Transparency
+		newStatic.Reflectance = P.Reflectance
+		newStatic.Color = P.Color
+		newStatic.Anchored = P.Anchored
+		newStatic.CFrame = ibox.CFrame
+		newStatic.Size = ibox.Size
+		newStatic.Parent = ibox.DirtyParent
+
+		frameCreated += 1
+	end
+
+	--if #ImaginaryCreateQueue == 0 then
+		local frameDestroyed = 0
+		while #ImaginaryDestroyQueue > 0 and frameDestroyed < Settings.ImaginaryDestroyedStaticsPartsPerFrame do
+			local v = table.remove(ImaginaryDestroyQueue)
+			v:Destroy()
+
+			frameDestroyed += 1
+		end
+	--end
+	--]]
+
 	frameDivs = 0
 
-	while frameDivs < Settings.MaxDivisionsPerFrame do
-		if #DivQueue == 0 then ShatterWorker() end
-		if not SubdivWorker() then break end
+	while #ShatterQueue > 0 and frameDivs < Settings.MaxDivisionsPerFrame do
+		ShatterWorker()
 	end
 
 	if isClient then return end
@@ -774,6 +856,13 @@ local function SerializedPartInstance(p)
 	}
 end
 
+local function SerializedCuttingPart(p)
+	return {
+		CFrame = p.CFrame,
+		Size = p.Size,
+		Shape = p.Shape.Value
+	}
+end
 
 
 local function GetMapParts(ID)
@@ -816,8 +905,16 @@ local function CreateReplicatedMapParts(ID, mapParts)
 end
 
 
+local function ReplicateDestructionToClients(destructionParams : Types.DestructionParams, event)
+	destructionParams = table.clone(destructionParams)
+	destructionParams.CuttingPart = SerializedCuttingPart(destructionParams.CuttingPart)
+
+	event.FireAll(destructionParams, GetMapParts(destructionParams.ID))
+end
+
+
 local function ReplicateDestructionFromServer(params, mapParts)
-	params.Shape = Enum.PartType:FromValue(params.Shape)
+	params.CuttingPart.Shape = Enum.PartType:FromValue(params.CuttingPart.Shape)
 
 	local dParams = ValidateDestructionParams(params)
 
@@ -825,22 +922,11 @@ local function ReplicateDestructionFromServer(params, mapParts)
 
 	dParams.replicated = true
 
-	InsertToShatterQueue(dParams)
+	table.insert(ShatterQueue, dParams)
 end
-
-
-local function ReplicateDestructionToClients(destructionParams : Types.DestructionParams)
-	destructionParams = table.clone(destructionParams)
-	destructionParams.Shape = destructionParams.Shape.Value
-	destructionParams.OnDestructCompleted = nil
-	destructionParams.CuttingPart = nil
-
-	ServerEvents.ReplicateDestruction.FireAll(destructionParams, GetMapParts(destructionParams.ID))
-end
-
 
 local function ReplicateImaginaryFromServer(params, mapParts)
-	params.Shape = Enum.PartType:FromValue(params.Shape)
+	params.CuttingPart.Shape = Enum.PartType:FromValue(params.CuttingPart.Shape)
 	params.SkipEncapsulatedVoxels = true
 
 	local dParams = ValidateDestructionParams(params)
@@ -850,21 +936,10 @@ local function ReplicateImaginaryFromServer(params, mapParts)
 	dParams.replicated = true
 
 	RunService.Heartbeat:Wait()
-	DivQueue = {}
+
 	ImaginaryVoxels(dParams)
 end
 
-
-local function ReplicateImaginaryToClients(destructionParams : Types.DestructionParams)
-	destructionParams = table.clone(destructionParams)
-	destructionParams.Shape = destructionParams.Shape.Value
-	destructionParams.OnDestructCompleted = nil
-	destructionParams.OnVoxelDestruct = nil
-	destructionParams.CuttingPart = nil
-	destructionParams.SkipEncapsulatedVoxels = nil
-
-	ServerEvents.ReplicateImaginary.FireAll(destructionParams, GetMapParts(destructionParams.ID))
-end
 
 
 local function CreatePuppets(puppets)
@@ -940,7 +1015,7 @@ local function ReplicateMapToNewPlayer(plr)
 			serialDirtied.Color = p.Color
 			serialDirtied.Material = p.Material.Value
 			serialDirtied.Transparency = p.Transparency
-			serialDirties.Reflectance = p.Reflectance
+			serialDirtied.Reflectance = p.Reflectance
 			table.insert(serialDirties, serialDirtied)
 		end
 		table.insert(replicatedDirties, {
@@ -1021,6 +1096,21 @@ local function ReplicateMapFromServer(SerialOpDirties, mapParts)
 end
 
 
+local function ModelQueueBehavior(funcToUse, intersectingPart, FilterTagged, CleanupDelay, OnVoxelDestruct, GridSize, SkipEncapsulatedVoxels, OnDestructCompleted, ...)
+	local cuttingPart = if typeof(intersectingPart) == "table" then intersectingPart.CuttingPart else intersectingPart
+	local ret = {}
+	if cuttingPart and typeof(cuttingPart) == "Instance" and cuttingPart:IsA("Model") then
+		for _, desc in ipairs(cuttingPart:GetDescendants()) do
+			if not desc:IsA("Part") then continue end
+			local r = funcToUse(desc, FilterTagged, CleanupDelay, OnVoxelDestruct, GridSize, SkipEncapsulatedVoxels, OnDestructCompleted, ...)
+			if typeof(r) == "table" then
+				table.move(r, 1, #r, #ret + 1, ret)
+			end
+		end
+		return true, ret
+	end
+	return false, ret
+end
 
 
 
@@ -1029,13 +1119,12 @@ end
 Shatterbox.Settings = Settings
 
 
-
 function Shatterbox.Puppeteer(voxel : Part)
 	assert(isServer, "This function can only be called from the server")
 
 	voxel:AddTag(IndestructibleTag)
-	if not voxel.Anchored then voxel:SetNetworkOwner(nil) end
 	voxel.Parent = workspace.CurrentCamera
+	if not voxel.Anchored then voxel:SetNetworkOwner(nil) end
 
 	local noSleepCon : RBXScriptConnection
 	noSleepCon = RunService.Heartbeat:Connect(function(deltaTime)
@@ -1091,25 +1180,16 @@ end
 --
 -- if no FilterTagged is given, everything except IndestructibleTag tagged Block parts are considered for destruction.
 function Shatterbox.Destroy(intersectingPart : Part | Model | Types.DestructionParams, FilterTagged : (string | {string})?, CleanupDelay : number?, OnVoxelDestruct : string?, GridSize : number?, SkipEncapsulatedVoxels : boolean?, OnDestructCompleted : (() -> ())?, ... : any)
-	local isPart, isModel, isTbl = false, false, typeof(intersectingPart) == "table"
-	local cuttingPart = intersectingPart
-	if isTbl then  cuttingPart = intersectingPart.CuttingPart end
-	isPart, isModel = cuttingPart and cuttingPart:IsA("Part"), cuttingPart and cuttingPart:IsA("Model")
-	assert(isPart or isModel or isTbl, "The input parameter to the destruction function must be a Part, Model, or a Table")
-	assert(not isTbl or (intersectingPart.CuttingPart or (intersectingPart.CFrame and intersectingPart.Size and intersectingPart.Shape)), "If you supply a table, it must have a CuttingPart or at least a CFrame, Size, and Shape.")
+
+	if ModelQueueBehavior(Shatterbox.Destroy, intersectingPart, FilterTagged, CleanupDelay, OnVoxelDestruct, GridSize, SkipEncapsulatedVoxels, OnDestructCompleted, ...) then
+		return
+	end
 
 	local params = ValidateDestructionParams(intersectingPart, FilterTagged, CleanupDelay, OnVoxelDestruct, GridSize, SkipEncapsulatedVoxels, OnDestructCompleted, ...)
+
 	task.defer(function()
 
-		if isModel then
-			for _, desc in ipairs(cuttingPart:GetDescendants()) do 
-				if not desc:IsA("Part") then continue end
-				local p = table.clone(params)
-				p.CuttingPart = desc
-				Shatterbox.Destroy(p)
-			end
-			return
-		end
+		if params.CleanupDelay < 0 then return end
 
 		params.ID = params.ID or HttpService:GenerateGUID(false)
 
@@ -1118,15 +1198,13 @@ function Shatterbox.Destroy(intersectingPart : Part | Model | Types.DestructionP
 		end
 
 		-- starts the smooth cleanup counter
-		if Settings.UseSmoothCleanup then task.delay(params.CleanupDelay, UndoDirtyOp, params.ID) end
-
-		if params.CleanupDelay <= 0 then return end
+		if params.CleanupDelay > 0 and Settings.UseSmoothCleanup then task.delay(params.CleanupDelay, UndoDirtyOp, params.ID) end
 
 		if USE_CLIENT_SERVER and isServer then
-			ReplicateDestructionToClients(params)
+			ReplicateDestructionToClients(params, ServerEvents.ReplicateDestruction)
 		end
 
-		InsertToShatterQueue(params)
+		table.insert(ShatterQueue, params)
 	end)
 end
 
@@ -1136,29 +1214,18 @@ end
 --Performs voxel destruction around 'intersectingPart', skipping as many intermediate parts as possible. <br>
 --
 -- Returns an array of imaginary voxels for you to optionally create as debris.
-function Shatterbox.ImaginaryVoxels(intersectingPart : Part | Model | Types.DestructionParams, FilterTagged : (string | {string})?, CleanupDelay : number?, GridSize : number?, SkipEncapsulatedVoxels : boolean?, destroyIntersectingPart : boolean?) : {Types.ImaginaryVoxel}
-	local isPart, isModel, isTbl = false, false, typeof(intersectingPart) == "table"
-	local cuttingPart = intersectingPart
-	if isTbl then  cuttingPart = intersectingPart.CuttingPart end
-	isPart, isModel = cuttingPart and cuttingPart:IsA("Part"), cuttingPart and cuttingPart:IsA("Model")
-	assert(isPart or isModel or isTbl, "The input parameter to the destruction function must be a Part, Model, or a Table")
-	assert(not isTbl or (intersectingPart.CuttingPart or (intersectingPart.CFrame and intersectingPart.Size and intersectingPart.Shape)), "If you supply a table, it must have a CuttingPart or at least a CFrame, Size, and Shape.")
+function Shatterbox.ImaginaryVoxels(intersectingPart : Part | Model | Types.ImaginaryDestructionParams, FilterTagged : (string | {string})?, CleanupDelay : number?, GridSize : number?, SkipEncapsulatedVoxels : boolean?) : {Types.ImaginaryVoxel}
 
-	local params = ValidateDestructionParams(intersectingPart, FilterTagged, CleanupDelay, nil, GridSize, SkipEncapsulatedVoxels)
-	if isTbl and (intersectingPart.destroyIntersectingPart or not intersectingPart.CuttingPart) then params.destroyIntersectingPart = true end
-
-	local voxels = {} :: {Types.ImaginaryVoxel}
-
-	if isModel then
-		for _, desc in ipairs(cuttingPart:GetDescendants()) do
-			if not desc:IsA("Part") then continue end
-			local p = table.clone(params)
-			p.CuttingPart = desc
-			local imaginaryVoxels = ImaginaryVoxels(p)
-			table.move(imaginaryVoxels, 1, #imaginaryVoxels, #voxels + 1, voxels)
-		end
+	local did, voxels = ModelQueueBehavior(Shatterbox.ImaginaryVoxels, intersectingPart, FilterTagged, CleanupDelay, nil, GridSize, SkipEncapsulatedVoxels, nil)
+	if did then
 		return voxels
 	end
+
+	local params = ValidateDestructionParams(intersectingPart, FilterTagged, CleanupDelay, nil, GridSize, SkipEncapsulatedVoxels)
+
+	if params.CleanupDelay < 0 then return {} end
+
+	voxels = voxels :: {Types.ImaginaryVoxel}
 
 	params.ID = params.ID or HttpService:GenerateGUID(false)
 
@@ -1167,18 +1234,20 @@ function Shatterbox.ImaginaryVoxels(intersectingPart : Part | Model | Types.Dest
 	end
 
 	if USE_CLIENT_SERVER and isServer then
-		ReplicateImaginaryToClients(params)
+		ReplicateDestructionToClients(params, ServerEvents.ReplicateImaginary)
 	end
 
 	RunService.Heartbeat:Wait()
-	DivQueue = {}
+
+	-- starts the smooth cleanup counter
+	if params.CleanupDelay > 0 and Settings.UseSmoothCleanup then task.delay(params.CleanupDelay, UndoDirtyOp, params.ID) end
+
 	return ImaginaryVoxels(params)
 end
 
 
 -- resets all modified parts to where they originally were (turning the map back to normal)
 function Shatterbox.Reset()
-	DivQueue = {}
 	ShatterQueue = {}
 
 	tmpFolder:ClearAllChildren()
@@ -1207,7 +1276,6 @@ end
 
 -- Cancels any ongoing operations
 function Shatterbox.ClearQueue()
-	DivQueue = {}
 	ShatterQueue = {}
 
 	if USE_CLIENT_SERVER and isServer then ServerEvents.SignalClearQueue.FireAll() end
@@ -1354,7 +1422,7 @@ Shatterbox.OnVoxelDestruct = HandleVoxelDestruction
 
 if isServer then
 	if USE_CLIENT_SERVER then
-		Players.PlayerAdded:Connect(ReplicateMapToNewPlayer)
+		ServerEvents.ClientInitComplete.On(ReplicateMapToNewPlayer)
 	end
 elseif isClient then
 	if USE_CLIENT_SERVER then
@@ -1365,11 +1433,14 @@ elseif isClient then
 		ClientEvents.ReplicateMap.On(ReplicateMapFromServer)
 		ClientEvents.ReplicateDestruction.On(ReplicateDestructionFromServer)
 		ClientEvents.ReplicateImaginary.On(ReplicateImaginaryFromServer)
+
+		ClientEvents.ClientInitComplete.Fire()
 	end
 	ClientEvents.CreatePuppets.On(CreatePuppets)
 	ClientEvents.ReplicatePuppetStates.On(ReplicatePuppetStates)
 	ClientEvents.DestroyPuppet.On(DestroyPuppet)
 end
+
 
 
 RunService.Heartbeat:Connect(HeartbeatWorker)

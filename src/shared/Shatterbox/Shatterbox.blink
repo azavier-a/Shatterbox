@@ -10,6 +10,12 @@ struct Box {
 	Size : vector
 }
 
+struct Hitbox {
+	..Box,
+
+	Shape : u8(0..4)
+}
+
 struct Destructible {
 	GridSize : f16?,
 	Tags : string[]
@@ -45,17 +51,22 @@ struct OpDirty {
 	Dirties : Dirtied[]
 }
 
-struct DestructionParamsType {
-	Shape : u8(0..4),
-	CFrame : CFrame,
-	Size : vector,
+struct ImaginaryDestructionParamsType {
+	ID : string,
+
+	CuttingPart : Hitbox,
 	
 	FilterTagged : string[]?,
 	GridSize : f32?,
-	CleanupDelay : f32?,
-	SkipEncapsulatedVoxels : boolean?,
-	ID : string,
+	CleanupDelay : f32?
+}
+
+struct DestructionParamsType {
 	
+	..ImaginaryDestructionParamsType,
+	
+	SkipEncapsulatedVoxels : boolean?,
+
 	OnVoxelDestruct : string?,
 	DestructParameters : unknown[]
 }
@@ -130,5 +141,13 @@ event ReplicateImaginary {
 	From: Server,
 	Type: Reliable,
 	Call: ManyAsync,
-	Data: (DestructionParamsType, PartInstance[]?)
+	Data: (ImaginaryDestructionParamsType, PartInstance[]?)
+}
+
+
+
+event ClientInitComplete {
+	From: Client,
+	Type: Reliable,
+	Call: SingleAsync
 }
