@@ -1,7 +1,10 @@
 --!native
 --!optimize 2
 
-local EPSILON = 1e-6
+
+
+local EPSILON = 1e-3
+local UNEPS = 1 - EPSILON
 
 local localAxisVectors = { X = "RightVector", Y = "UpVector", Z = "ZVector" }
 
@@ -13,7 +16,7 @@ local PartTypeContainsPoint = {}
 
 PartTypeContainsPoint.Ball = function(cframe : CFrame, size : Vector3, p : Vector3)
 
-	local dp = p - cframe.Position
+	local dp = (p - cframe.Position) * UNEPS
 	local dx, dy, dz = dp.X, dp.Y, dp.Z
 	local minSize = math.min(size.X, size.Y, size.Z) * 0.5
 
@@ -22,7 +25,7 @@ end
 
 PartTypeContainsPoint.Cylinder = function(cframe : CFrame, size : Vector3, p : Vector3)
 
-	local localPoint = cframe:PointToObjectSpace(p):Abs()
+	local localPoint = cframe:PointToObjectSpace(p):Abs() * UNEPS
 
 	if localPoint.X > size.X * 0.5 then return false end
 
@@ -34,14 +37,14 @@ end
 
 PartTypeContainsPoint.Block = function(cframe : CFrame, size : Vector3, p : Vector3)
 
-	local localPoint = cframe:PointToObjectSpace(p):Abs()
+	local localPoint = cframe:PointToObjectSpace(p):Abs() * UNEPS
 
 	return (localPoint.X <= size.X * 0.5) and (localPoint.Y <= size.Y * 0.5) and (localPoint.Z <= size.Z * 0.5)
 end
 
 PartTypeContainsPoint.Wedge = function(cframe : CFrame, size : Vector3, p : Vector3)
 
-	local localPoint = cframe:PointToObjectSpace(p)
+	local localPoint = cframe:PointToObjectSpace(p) * UNEPS
 	local absPoint = localPoint:Abs()
 	local wsy, wsz = size.Y, size.Z
 
@@ -50,7 +53,7 @@ end
 
 PartTypeContainsPoint.CornerWedge = function(cframe : CFrame, size : Vector3, p : Vector3)
 
-	local localPoint = cframe:PointToObjectSpace(p)
+	local localPoint = cframe:PointToObjectSpace(p) * UNEPS
 	local absPoint = localPoint:Abs()
 	local wsx, wsy, wsz = size.X, size.Y, size.Z
 
@@ -62,6 +65,7 @@ end
 local GetVerts = {}
 
 GetVerts.Block = function(cframe : CFrame, size : Vector3)
+    size = size * 0.5
     local lx, ly, lz = cframe.XVector*size.X, cframe.YVector*size.Y, cframe.ZVector*size.Z
     local ny, nz = -ly, -lz
     local pnx, plx = cframe.Position - lx, cframe.Position + lx
@@ -80,6 +84,7 @@ end
 local block_edges = { {1,2}, {1,3}, {1,5}, {2,4}, {2,6}, {3,4}, {3,7}, {4,8}, {5,6}, {5,7}, {6,8}, {7,8} }
 
 GetVerts.Wedge = function(cframe : CFrame, size : Vector3)
+    size = size * 0.5
     local lx, ly, lz = cframe.XVector*size.X, cframe.YVector*size.Y, cframe.ZVector*size.Z
     local ny, nz = -ly, -lz
     local pnx, plx = cframe.Position - lx, cframe.Position + lx
@@ -96,6 +101,7 @@ end
 local wedge_edges = { {1,2}, {2,4}, {4,3}, {3,1}, {2,5}, {4,6}, {5,6}, {1,3}, {1,5}, {3,6} }
 
 GetVerts.CornerWedge = function(cframe : CFrame, size : Vector3)
+    size = size * 0.5
     local lx, ly, lz = cframe.XVector*size.X, cframe.YVector*size.Y, cframe.ZVector*size.Z
     local ny, nz = -ly, -lz
     local pnx, plx = cframe.Position - lx, cframe.Position + lx
@@ -399,20 +405,51 @@ local function MOTS(Part : PartType, GridSize : number)
 	local createdParts = { { CFrame = Part.CFrame, Size = PartSize } }
 	local tmpParts = {}
 
-	local ax,ay,az, la, size, hs, cframe, hla, ps
 	for _, axis in pairs(Axis) do
-		ax, ay, az = axis == "X", axis == "Y", axis == "Z"
-		la = localAxisVectors[axis]
+		local ax, ay, az = axis == "X", axis == "Y", axis == "Z"
+		local l_axis = localAxisVectors[axis]
 
 		for _, part in pairs(createdParts) do
-			size = part.Size
-			hs = size[axis] * 0.5
-			cframe = part.CFrame
-			hla = cframe[la] * 0.5 * hs
-			ps = Vector3.new( (ax and hs or size.X) , (ay and hs or size.Y) , (az and hs or size.Z) )
+			local size = part.Size
+            local hs, cframe = size[axis] * 0.5, part.CFrame
+            local la = cframe[l_axis]
 
-			table.insert(tmpParts, { CFrame = cframe + hla, Size = ps })
-			table.insert(tmpParts, { CFrame = cframe - hla, Size = ps }) 
+            local numVoxels = size[axis] // GridSize
+            if numVoxels % 2 == 0 then
+
+                local hla = la * 0.5 * hs
+                local ps = Vector3.new( (ax and hs or size.X), (ay and hs or size.Y), (az and hs or size.Z) )
+                table.insert(tmpParts, {
+                    CFrame = (cframe + hla):Orthonormalize(),
+                    Size = ps
+                })
+                table.insert(tmpParts, {
+                    CFrame = (cframe - hla):Orthonormalize(),
+                    Size = ps
+                })
+            else
+                local vs = size[axis] / numVoxels
+                local FHV, CHV = vs * math.floor(numVoxels * 0.5), vs * math.ceil(numVoxels * 0.5)
+
+                local off = CHV * 0.5
+                table.insert(tmpParts, {
+                    CFrame = (cframe - off * la):Orthonormalize(),
+                    Size = Vector3.new(
+                        ax and FHV or size.X,
+                        ay and FHV or size.Y,
+                        az and FHV or size.Z
+                    )
+                })
+                off = FHV * 0.5
+                table.insert(tmpParts, {
+                    CFrame = (cframe + off * la):Orthonormalize(),
+                    Size = Vector3.new(
+                        ax and CHV or size.X,
+                        ay and CHV or size.Y,
+                        az and CHV or size.Z
+                    )
+                })
+            end
 		end
 
 		createdParts = tmpParts
@@ -434,19 +471,54 @@ local function KDS(Part : PartType, GridSize : number)
 		axis, maxSize = a, PartSizeAxis
 	end
 
-	if not axis then return nil end
+    if not axis then return nil end
 
-	local hs = PartSize[axis] * 0.5
-	local cframe = Part.CFrame
-	local hla = cframe[localAxisVectors[axis]] * 0.5 * hs
+    local hs = PartSize[axis] * 0.5
+    local cframe = Part.CFrame
 
-	local ps = Vector3.new(
-		axis == "X" and hs or PartSize.X,
-		axis == "Y" and hs or PartSize.Y,
-		axis == "Z" and hs or PartSize.Z
-	)
+    local numVoxels = PartSize[axis] // GridSize
+    if numVoxels % 2 == 0 then
 
-	return { { CFrame = cframe + hla, Size = ps }, { CFrame = cframe - hla, Size = ps } }
+        local hla = cframe[localAxisVectors[axis]] * 0.5 * hs
+
+        local ps = Vector3.new(
+            axis == "X" and hs or PartSize.X,
+            axis == "Y" and hs or PartSize.Y,
+            axis == "Z" and hs or PartSize.Z
+        )
+
+        return { { CFrame = (cframe + hla):Orthonormalize(), Size = ps }, { CFrame = (cframe - hla):Orthonormalize(), Size = ps } }
+    else
+        local AX, AY, AZ = axis == "X", axis == "Y", axis == "Z"
+        local la = cframe[localAxisVectors[axis]]
+        local vs = PartSize[axis] / numVoxels
+
+        local createdParts = table.create(2)
+
+        local FHV, CHV = vs * math.floor(numVoxels * 0.5), vs * math.ceil(numVoxels * 0.5)
+
+        local off = CHV * 0.5
+        createdParts[1] = {
+            CFrame = (cframe - off * la):Orthonormalize(),
+            Size = Vector3.new(
+                AX and FHV or PartSize.X,
+                AY and FHV or PartSize.Y,
+                AZ and FHV or PartSize.Z
+            )
+        }
+
+        off = FHV * 0.5
+        createdParts[2] = {
+            CFrame = (cframe + off * la):Orthonormalize(),
+            Size = Vector3.new(
+                AX and CHV or PartSize.X,
+                AY and CHV or PartSize.Y,
+                AZ and CHV or PartSize.Z
+            )
+        }
+
+        return createdParts
+    end
 end
 
 

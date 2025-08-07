@@ -2,7 +2,7 @@
 --!optimize 2
 
 
--- Shatterbox release 7.8 beta
+-- Shatterbox release 7.8 beta 2
 
 
 --#selene: allow(multiple_statements)
@@ -64,6 +64,14 @@ local USE_CLIENT_SERVER = true
 
 
 local Settings = {}
+
+Settings.UseGreedyMeshing = true
+
+Settings.GMTraversalsPerFrame = 2000
+
+Settings.GMPartCreationsPerFrame = 5
+
+Settings.GMWorkerCount = 10
 
 Settings.UseSmoothCleanup = true
 
@@ -198,11 +206,21 @@ local defaultOverlapParams = OverlapParams.new()
 defaultOverlapParams.FilterType = Enum.RaycastFilterType.Exclude
 defaultOverlapParams.FilterDescendantsInstances = { tmpFolder }
 
+local overlapParams = OverlapParams.new()
+
 local opDirties = {} :: {
 	[string]: {
-		{ Part : Part, OriginalParent : Instance, model : Model }
+		{ Part : Part, OriginalParent : Instance, model : Model, GridSize : number }
 	}
 }
+
+local FlaggedDirty = {} :: {
+	[string] : { {DirtyParent : Model, GridSize : number} }
+}
+
+local GreedyWorkers = {} :: { [Model] : thread }
+local GreedyWorkersTerminationFlags = {} :: { [Model] : boolean }
+local ActiveGMWorkerCount = 0
 
 local ShatterQueue = {} :: { Types.DestructionParams }
 local frameDivs = 0
@@ -227,6 +245,391 @@ local IntersectingPart = Instance.new("Part")
 local accum = 0
 
 
+
+local function PartFromTemplate(template)
+
+	local part = Instance.new("Part")
+	part.Material = if typeof(template.Material) == "number" then Enum.Material:FromValue(template.Material) else template.Material
+	part.Transparency = template.Transparency
+	part.Reflectance = template.Reflectance or 0
+	part.Color = template.Color
+	--part.Color = Color3.fromHSV(math.random(), 1, 1)
+	part.Anchored = true
+	part.CollisionGroup = template.CollisionGroup
+	part.MaterialVariant = template.MaterialVariant
+
+	if typeof(template) == "Instance" then
+		for _, tag in ipairs(template:GetTags()) do
+			part:AddTag(tag)
+		end
+		for k, v in pairs(template:GetAttributes()) do
+			part:SetAttribute(k, v)
+		end
+	else
+		for _, tag in ipairs(template.Tags) do
+			part:AddTag(tag)
+		end
+		for k, v in pairs(template.Attributes) do
+			part:SetAttribute(k, v)
+		end
+	end
+
+	return part
+end
+
+
+local function SerializedPartInstance(p, ignoreWorldState)
+	local serial = {
+		Color = p.Color,
+		Material = p.Material.Value,
+		Transparency = p.Transparency,
+		Reflectance = p.Reflectance,
+		CollisionGroup = p.CollisionGroup,
+		MaterialVariant = p.MaterialVariant,
+
+		Tags = p:GetTags(),
+		Attributes = p:GetAttributes()
+	}
+
+	if not ignoreWorldState then
+		serial.CFrame = p.CFrame
+		serial.Size = p.Size
+	end
+
+	return serial
+end
+
+
+local function GridInfo(PartCFrame : CFrame, PartSize : Vector3, GridSize : number)
+	local DIM = Vector3.one:Max(PartSize // GridSize)
+	local NVX, NVY, NVZ = DIM.X, DIM.Y, DIM.Z
+
+	local VoxelSize = PartSize / DIM
+	local VSX, VSY, VSZ = VoxelSize.X, VoxelSize.Y, VoxelSize.Z
+
+	local lsx, lsy, lsz = PartCFrame.XVector*VSX, PartCFrame.YVector*VSY, PartCFrame.ZVector*VSZ
+
+	local ExtentOffset = 0.5*( lsx*(NVX - 1) + lsy*(NVY - 1) + lsz*(NVZ - 1) )
+
+	return (PartCFrame - ExtentOffset):Orthonormalize(), -- Minimum cframe
+		   (PartCFrame + ExtentOffset):Orthonormalize(), -- Maximum cframe
+		   VoxelSize, -- voxel size
+		   lsx, lsy, lsz, -- local axis vectors scaled by the size of the part,
+		   NVX, NVY, NVZ -- the number of voxels along each axis
+end
+
+
+local EPSILON = 1e-3
+
+local function InitGreedyState(part, GridSize, groupMin, State, DIMYDIMZ, DIMZ)
+
+	local minCFrame, _, S, _, _, _, NVX, NVY, NVZ = GridInfo(part.CFrame:Orthonormalize(), part.Size, GridSize)
+
+	if not minCFrame.Rotation:FuzzyEq(groupMin.Rotation, EPSILON) then
+		return 0
+	end
+
+	local off = minCFrame.Position - groupMin.Position
+
+	local ODX, ODY, ODZ = off:Dot(groupMin.XVector) / S.X,
+					      off:Dot(groupMin.YVector) / S.Y,
+					      off:Dot(groupMin.ZVector) / S.Z
+	local DX, DY, DZ = math.floor(ODX + 0.5),
+					   math.floor(ODY + 0.5),
+					   math.floor(ODZ + 0.5)
+
+	if math.abs(DX - ODX) > EPSILON or math.abs(DY - ODY) > EPSILON or math.abs(DZ - ODZ) > EPSILON then
+		return 0
+	end
+
+	DX -= 1
+	DY -= 1
+
+	local traversed = 0
+	-- Initialize the 3d state volume
+	for X = 1, NVX do
+		local dixz = (X + DX)*DIMYDIMZ + DZ
+		for Y = 1, NVY do
+			local di = dixz + (Y + DY)*DIMZ
+			for Z = 1, NVZ do
+				if traversed == Settings.GMTraversalsPerFrame then
+					coroutine.yield()
+					traversed = 0
+				end
+
+				State[di + Z] = true
+
+				traversed += 1
+			end
+		end
+	end
+
+	DX += 1
+	DY += 1
+
+	return {1 + DX, 1 + DY, 1 + DZ, DX + NVX, DY + NVY, DZ + NVZ}, NVX * NVY * NVZ
+end
+
+
+local function GreedyMeshWorker(DirtyParent : Model, GridSize : number?)
+
+	local Original = Shatterbox.GetOriginalPart(DirtyParent)
+
+	-- The bounding area of Greedy Meshing, defined by the original part before it was ever destroyed
+	local groupMin, _, VoxelSize, _, _, _, DIMX, DIMY, DIMZ = GridInfo(Original.CFrame, Original.Size, GridSize)
+	local DIMYDIMZ = DIMY*DIMZ
+	local VSX, VSY, VSZ = VoxelSize.X, VoxelSize.Y, VoxelSize.Z
+
+	-- flat 3d state/visited array : index = (X - 1)*DIMYDIMZ + (Y - 1)*DIMZ + Z
+	local State, Visited = {}, {}
+
+	-- information about the original parts, used for smoothly displaying the output of greedy meshing
+	local OriginalPartsInfo = {} :: {
+		{Part : Part, PartGridInfo : {any}, Contributed : {number}}
+	}
+
+	-- the total number of voxels in the State array
+	local count = 0
+
+	for _, child in ipairs(DirtyParent:GetChildren()) do
+		local gridInfo, n = InitGreedyState(child, GridSize, groupMin, State, DIMYDIMZ, DIMZ)
+		if n > 0 then
+			count += n
+
+			table.insert(OriginalPartsInfo, {
+				Part = child,
+				PartGridInfo = gridInfo,
+
+				Contributed = {}
+			})
+		end
+	end
+
+	local meshed = {}
+
+	local traversed = 0
+
+	local sx, sy, sz = 1, 1, 1
+	while count > 0 do
+		local X, Y, Z = sx, sy, sz
+		local iyz = (Y - 1)*DIMZ + Z
+		local si = (X - 1)*DIMYDIMZ + iyz
+		-- find first unvisited and active state position
+		while Visited[si] or not State[si] do
+			if traversed == Settings.GMTraversalsPerFrame then
+				coroutine.yield()
+				traversed = 0
+			end
+
+			if X < DIMX then
+				X += 1
+			else
+				X = 1
+				if Y < DIMY then
+					Y += 1
+				else
+					Y = 1
+					if Z < DIMZ then
+						Z += 1
+					else
+						Z = 1
+					end
+				end
+				iyz = (Y - 1)*DIMZ + Z
+			end
+
+			traversed += 1
+			si = (X - 1)*DIMYDIMZ + iyz
+		end
+		sx, sy, sz = X, Y, Z
+
+		Visited[si] = true
+
+		-- planar expansion along X axis
+		while X < DIMX do
+			local DX = X + 1
+
+			if traversed == Settings.GMTraversalsPerFrame then
+				coroutine.yield()
+				traversed = 0
+			end
+
+			local index = (DX - 1)*DIMYDIMZ + (Y - 1)*DIMZ + Z
+			if Visited[index] or not State[index] then break end
+
+			Visited[index] = true
+			traversed += 1
+
+			X = DX
+		end
+
+		-- planar expansion along Y axis
+		while Y < DIMY do
+			local DY = Y + 1
+			local iyz = (DY - 1)*DIMZ + Z
+			local breakExpansion = false
+
+			local indices = {}
+
+			for ix = sx, X do
+				if traversed == Settings.GMTraversalsPerFrame then
+					coroutine.yield()
+					traversed = 0
+				end
+
+				local index = (ix - 1)*DIMYDIMZ + iyz
+				if Visited[index] or not State[index] then
+					breakExpansion = true
+					break
+				end
+
+				indices[index] = true
+				traversed += 1
+			end
+
+			if breakExpansion then break end
+
+			for index in pairs(indices) do
+				Visited[index] = true
+			end
+
+			Y = DY
+		end
+
+		-- planar expansion along Z axis
+		while Z < DIMZ do
+			local DZ = Z + 1
+			local breakExpansion = false
+
+			local indices = {}
+
+			for ix = sx, X do
+				local ixz = (ix - 1)*DIMYDIMZ + DZ
+				for iy = sy, Y do
+					if traversed == Settings.GMTraversalsPerFrame then
+						coroutine.yield()
+						traversed = 0
+					end
+
+					local index = ixz + (iy - 1)*DIMZ
+					if Visited[index] or not State[index] then
+						breakExpansion = true
+						break
+					end
+
+					indices[index] = true
+					traversed += 1
+				end
+
+				if breakExpansion then break end
+			end
+
+			if breakExpansion then break end
+
+			for index in pairs(indices) do
+				Visited[index] = true
+			end
+
+			Z = DZ
+		end
+
+		-- the number of voxels in the meshed span on every axis
+		local NX, NY, NZ = X - sx + 1, Y - sy + 1, Z - sz + 1
+		-- subtract the total number of voxels in the meshed span
+		count -= NX * NY * NZ
+
+		-- define a cuboid using the start and end positions.
+		table.insert(meshed, {
+			CFrame = ( groupMin + groupMin.XVector*VSX*((X + sx)*0.5 - 1) + groupMin.YVector*VSY*((Y + sy)*0.5 - 1) + groupMin.ZVector*VSZ*((Z + sz)*0.5 - 1) ):Orthonormalize(),
+			Size = VoxelSize * Vector3.new(NX, NY, NZ),
+
+			Contributed = {},
+
+			MINX = sx,
+			MINY = sy,
+			MINZ = sz,
+
+			MAXX = X,
+			MAXY = Y,
+			MAXZ = Z
+		})
+	end
+
+	-- process voxel count contributions (for smooth display of greedy meshing)
+	for meshedIndex, MI in ipairs(meshed) do
+		local contributedToMeshed, MINX, MINY, MINZ, MAXX, MAXY, MAXZ = MI.Contributed, MI.MINX, MI.MINY, MI.MINZ, MI.MAXX, MI.MAXY, MI.MAXZ
+
+		for i, partInfo in ipairs(OriginalPartsInfo) do
+			local PMINX, PMINY, PMINZ, PMAXX, PMAXY, PMAXZ = unpack(partInfo.PartGridInfo)
+
+			-- SAT test in voxel coordinate space??
+			if math.max(PMINX, MINX) > math.min(PMAXX, MAXX) or math.max(PMINY, MINY) > math.min(PMAXY, MAXY) or math.max(PMINZ, MINZ) > math.min(PMAXZ, MAXZ) then continue end
+
+			table.insert(contributedToMeshed, i)
+			table.insert(partInfo.Contributed, meshedIndex)
+		end
+	end
+
+	local InstancedMeshIDs, numInstanced, numMeshed = {}, 0, #meshed
+
+	count = 0
+
+	-- Expertly performing dual DFS for smooth display of meshing (visual groups are instantiated one by one)
+	while numInstanced < numMeshed do
+		if count >= Settings.GMPartCreationsPerFrame then
+			coroutine.yield()
+			count = 0
+		end
+
+		local startIndex
+		for i in ipairs(meshed) do
+			if InstancedMeshIDs[i] then continue end
+			startIndex = i
+			break
+		end
+
+		local visitedOriginals, visitedMeshed, pathStack = {}, { [startIndex] = true }, {startIndex}
+
+		while #pathStack > 0 do
+			local mi = table.remove(pathStack)
+			local meshedInfo = meshed[mi]
+
+			for _, io in ipairs(meshedInfo.Contributed) do
+				if visitedOriginals[io] then continue end
+				visitedOriginals[io] = true
+
+				local partInfo = OriginalPartsInfo[io]
+
+				for _, im in ipairs(partInfo.Contributed) do
+					if visitedMeshed[im] then continue end
+					visitedMeshed[im] = true
+
+					table.insert(pathStack, im)
+				end
+			end
+		end
+
+		for meshedID in pairs(visitedMeshed) do
+			InstancedMeshIDs[meshedID] = true
+			numInstanced += 1
+
+			local meshedInfo = meshed[meshedID]
+
+			local newStatic = PartFromTemplate(Original)
+			newStatic.CFrame = meshedInfo.CFrame
+			newStatic.Size = meshedInfo.Size
+			newStatic.Parent = DirtyParent
+
+			count += 1
+		end
+
+		for originalID in pairs(visitedOriginals) do
+			OriginalPartsInfo[originalID].Part:Destroy()
+		end
+	end
+end
+
+
 local function AncestorGroupTags(i : Instance, tags) : {string}
 	tags = tags or {}
 
@@ -246,24 +649,26 @@ end
 
 
 -- returns OverlapParams including all instances with the given tags.
-local function OverlapParamsOfTagged(tags : { string }, instant) : OverlapParams
-	local arr = {}
+local function OverlapParamsOfTagged(tags : { string }) : OverlapParams
+	local arr
 
 	if #tags == 1 then
-		arr = if instant then CollectionService:GetTagged(tags[1]) else TaggedArray(tags[1])
+		arr = CollectionService:GetTagged(tags[1])
 	else
+		arr = {}
 		for _, tag in ipairs(tags) do
-			local taggedArray = if instant then CollectionService:GetTagged(tag) else TaggedArray(tag)
+			local taggedArray = CollectionService:GetTagged(tag)
 			table.move(taggedArray, 1, #taggedArray, #arr + 1, arr)
 		end
 	end
 
-	local overlapParams = OverlapParams.new()
 	overlapParams.FilterType = Enum.RaycastFilterType.Include
 	overlapParams.FilterDescendantsInstances = arr
 
 	return overlapParams
 end
+
+
 
 
 --I wonder if anyone has done this before.
@@ -274,34 +679,18 @@ local function ImaginaryVoxelize(part, GridSize)
 
 	GridSize = GridSize or Settings.DefaultGridSize
 
-	local PartSize = part.Size
-	local psx, psy, psz = PartSize.X, PartSize.Y, PartSize.Z
-
-	local NDX, NDY, NDZ = math.max(0, math.floor(-math.log(GridSize / psx, 2))),
-						  math.max(0, math.floor(-math.log(GridSize / psy, 2))),
-						  math.max(0, math.floor(-math.log(GridSize / psz, 2)))
-
-	local DDX, DDY, DDZ = NDX > 0, NDY > 0, NDZ > 0
-	if not (DDX or DDY or DDZ) then return {} end
-	local NVX, NVY, NVZ = 2^NDX, 2^NDY, 2^NDZ
+	local O, _, S, lsx, lsy, lsz, NVX, NVY, NVZ = GridInfo(part.CFrame:Orthonormalize(), part.Size, GridSize)
 
 	local imaginaryParts, index = table.create(NVX*NVY*NVZ), 0
 
-	local npsx, npsy, npsz = psx*(0.5^NDX), psy*(0.5^NDY), psz*(0.5^NDZ)
-
-	local cframe = part.CFrame
-	local lx, ly, lz = cframe.XVector, cframe.YVector, cframe.ZVector
-	local O = cframe - lx*npsx*(0.5*NVX - 0.5) - ly*npsy*(0.5*NVY - 0.5) - lz*npsz*(0.5*NVZ - 0.5)
-	local S = Vector3.new(npsx, npsy, npsz)
-
-	for X = 1, NVX do
-		local dx = (X - 1)*lx*npsx
-		for Y = 1, NVY do
-			local dy = (Y - 1)*ly*npsy
-			for Z = 1, NVZ do
+	for X = 0, NVX - 1 do
+		local dx = X*lsx
+		for Y = 0, NVY - 1 do
+			local dy = Y*lsy
+			for Z = 0, NVZ - 1 do
 				index += 1
 				imaginaryParts[index] = {
-					CFrame = O + dx + dy + (Z - 1)*lz*npsz,
+					CFrame = O + dx + dy + Z*lsz,
 					Size = S
 				}
 			end
@@ -338,9 +727,14 @@ local function UndoDirtyOp(ID : string, replicated : boolean?)
 	if found then table.remove(ShatterQueue, found) end
 
 	for _, dirtied in ipairs(intersectedDirties) do
+		local DirtyParent = dirtied.model
+		if GreedyWorkers[DirtyParent] then
+			GreedyWorkersTerminationFlags[DirtyParent] = true
+			while GreedyWorkers[DirtyParent] do RunService.Heartbeat:Wait() end
+		end
 		local restored = dirtied.Part:Clone()
-		restored.Parent = dirtied.model.Parent
-		dirtied.model:Destroy()
+		restored.Parent = DirtyParent.Parent
+		DirtyParent:Destroy()
 	end
 
 	--[[
@@ -373,7 +767,36 @@ local function UndoDirtyOp(ID : string, replicated : boolean?)
 end
 
 
-local function MarkDirty(ID, Part : Part)
+local function FlagDirty(ID, GridSize : number, dirtyParent : Model)
+	if not dirtyParent then return end
+
+	GridSize = GridSize or dirtyParent:GetAttribute("GridSize") or Settings.DefaultGridSize
+
+	if GreedyWorkers[dirtyParent] then
+		GreedyWorkersTerminationFlags[dirtyParent] = true
+	end
+
+	for _, dirtied in pairs(FlaggedDirty) do
+		local found
+		for i, v in ipairs(dirtied) do
+			if v.DirtyParent == dirtyParent then
+				found = table.remove(dirtied, i)
+				GridSize = math.min(GridSize, v.GridSize)
+				break
+			end
+		end
+		if found then break end
+	end
+
+	if FlaggedDirty[ID] then
+		table.insert(FlaggedDirty[ID], {GridSize = GridSize, DirtyParent = dirtyParent})
+	else
+		FlaggedDirty[ID] = { {GridSize = GridSize, DirtyParent = dirtyParent} }
+	end
+end
+
+
+local function MarkDirty(ID, GridSize : number, Part : Part)
 
 	if Part:HasTag("ShatterboxDebris") then return end
 
@@ -418,10 +841,15 @@ local function MarkDirty(ID, Part : Part)
 		table.insert(opDirties[ID], {
 			Part = Part,
 			OriginalParent = PartParent,
-			model = model
+			model = model,
+			GridSize = GridSize
 		})
 
 		return true
+	end
+
+	if Settings.UseGreedyMeshing then
+		FlagDirty(ID, GridSize, Part.Parent)
 	end
 
 	return false
@@ -439,12 +867,12 @@ local function HandleVoxelDestruction(callbackName : string?, voxel : Part, dirt
 end
 
 
-local function GetDestructibleParts(ID, cuttingPart, filterTagged, instant, replicated)
+local function GetDestructibleParts(ID, cuttingPart, GridSize, filterTagged, replicated)
 	local partsInPart = {}
 
-	local overlapParams =
+	local op =
 		if filterTagged then
-			OverlapParamsOfTagged(filterTagged, instant)
+			OverlapParamsOfTagged(filterTagged)
 		else
 			defaultOverlapParams
 
@@ -452,14 +880,14 @@ local function GetDestructibleParts(ID, cuttingPart, filterTagged, instant, repl
 	IntersectingPart.Size = cuttingPart.Size
 	IntersectingPart.Shape = cuttingPart.Shape
 
-	for _, part in ipairs( workspace:GetPartsInPart(IntersectingPart, overlapParams) ) do
+	for _, part in ipairs( workspace:GetPartsInPart(IntersectingPart, op) ) do
 
 		if replicated and not part:IsDescendantOf(clientMapFolder) then continue end
 
 		if ShouldSkipInstance(part) then continue end
 
 		-- adds this part to the smooth cleanup for this destruction, if it's not already destroyed by something else
-		MarkDirty(ID, part)
+		MarkDirty(ID, GridSize, part)
 
 		table.insert(partsInPart, part)
 	end
@@ -497,9 +925,10 @@ end
 
 
 local function ImaginaryVoxels(params, frameLimit, toDestroy)
-	local voxels = {} :: {Types.ImaginaryVoxel}
+	local voxelCount = 0
+	local voxels = setmetatable({}, { __len = function() return voxelCount end }) :: {Types.ImaginaryVoxel}
 
-	toDestroy = toDestroy or GetDestructibleParts(params.ID, params.CuttingPart, params.FilterTagged, true, params.replicated)
+	toDestroy = toDestroy or GetDestructibleParts(params.ID, params.CuttingPart, params.GridSize, params.FilterTagged, params.replicated)
 
 	if #toDestroy == 0 then return voxels end
 
@@ -510,7 +939,7 @@ local function ImaginaryVoxels(params, frameLimit, toDestroy)
 			CFrame = part.CFrame,
 			Size = part.Size,
 
-			Original = part,
+			Original = Shatterbox.GetOriginalPart(part.Parent),
 			DestructionID = params.ID,
 
 			DirtyParent = part.Parent,
@@ -550,57 +979,87 @@ local function ImaginaryVoxels(params, frameLimit, toDestroy)
 			table.move(dividing, 1, #dividing, #creating + 1, creating)
 			break
 		end
-		if frameLimit then frameDivs += 1 end
 
 		local toDivide = table.remove(dividing)
-		local verts
+		local verts = BlockVerts(toDivide.CFrame, toDivide.Size)
 
-		local intersected
+		local intersected = PartContainsAVert(cuttingPart, verts)
 
-		if iBa then
-			intersected = VertexMath.BallIntersectsBlock(cpcf, cps, toDivide.CFrame, toDivide.Size)
-		elseif iC then
-			verts = BlockVerts(toDivide.CFrame, toDivide.Size)
-			intersected = VertexMath.CylinderIntersectsBlock(cpcf, cps, intersectingVerts, intersectingNormals, toDivide.CFrame, toDivide.Size, verts, BlockNormals(toDivide.CFrame))
+		if not intersected then
+			if iBa then
+				intersected = VertexMath.BallIntersectsBlock(cpcf, cps, toDivide.CFrame, toDivide.Size)
+			elseif iC then
+				intersected = VertexMath.CylinderIntersectsBlock(cpcf, cps, intersectingVerts, intersectingNormals, toDivide.CFrame, toDivide.Size, verts, BlockNormals(toDivide.CFrame))
+			else
+				intersected = VertexMath.SAT(intersectingVerts, intersectingNormals, verts, BlockNormals(toDivide.CFrame))
+			end
 		else
-			verts = BlockVerts(toDivide.CFrame, toDivide.Size)
-			intersected = PartContainsAVert(cuttingPart, verts) or VertexMath.SAT(intersectingVerts, intersectingNormals, verts, BlockNormals(toDivide.CFrame))
+			table.remove(verts, intersected)
 		end
 
 		if intersected then
 			local s, o, gridSize, dirtyParent, destructionID = toDivide.Size, toDivide.Original, toDivide.GridSize, toDivide.DirtyParent, toDivide.DestructionID
 
 			if PartContainsAllVerts(cuttingPart, verts or BlockVerts(toDivide.CFrame, toDivide.Size)) then
-				if params.SkipEncapsulatedVoxels then continue end
-				local createdParts = ImaginaryVoxelize(toDivide, gridSize)
-				for _, created in ipairs(createdParts) do
-					created.Original = o
-					created.GridSize = gridSize
-					created.DirtyParent = dirtyParent
-					created.DestructionID = destructionID
+				if params.SkipEncapsulatedVoxels then
+					local voxelCountAxis = toDivide.Size // gridSize
+					voxelCount += voxelCountAxis.X*voxelCountAxis.Y*voxelCountAxis.Z
+				else
+					local createdParts = ImaginaryVoxelize(toDivide, gridSize)
+					voxelCount += #createdParts
+					for _, created in ipairs(createdParts) do
+						created.Original = o
+						created.GridSize = gridSize
+						created.DirtyParent = dirtyParent
+						created.DestructionID = destructionID
+					end
+					table.move(createdParts, 1, #createdParts, #voxels + 1, voxels)
 				end
-				table.move(createdParts, 1, #createdParts, #voxels + 1, voxels)
 				continue
 			end
 
 			toDivide.isEdge = true
 
 			local sx,sy,sz = s.X, s.Y, s.Z
-			if sx <= gridSize and sy <= gridSize and sz <= gridSize then table.insert(voxels, toDivide) continue end
+			if sx <= gridSize and sy <= gridSize and sz <= gridSize then
+				voxelCount += 1
+				table.insert(voxels, toDivide)
+				continue
+			end
 
 			local minsize, maxsize = math.min(sx, sy, sz), math.max(sx, sy, sz)
 			local Subdivide = SubdivideFunctions[(maxsize > 2 * minsize) and "KD" or "MOT"]
 
+			if frameLimit then frameDivs += 1 end
+
 			local createdParts = Subdivide(toDivide, gridSize)
 			if createdParts then
 				for _, created in ipairs(createdParts) do
-					created.Original = o
-					created.GridSize = gridSize
-					created.DirtyParent = dirtyParent
-					created.DestructionID = destructionID
+					if PartContainsAllVerts(cuttingPart, BlockVerts(created.CFrame, created.Size)) then
+						if params.SkipEncapsulatedVoxels then
+							local voxelCountAxis = created.Size // gridSize
+							voxelCount += voxelCountAxis.X*voxelCountAxis.Y*voxelCountAxis.Z
+						else
+							local newVoxels = ImaginaryVoxelize(toDivide, gridSize)
+							voxelCount += #newVoxels
+							for _, v in ipairs(newVoxels) do
+								v.Original = o
+								v.GridSize = gridSize
+								v.DirtyParent = dirtyParent
+								v.DestructionID = destructionID
+							end
+							table.move(newVoxels, 1, #newVoxels, #voxels + 1, voxels)
+						end
+					else
+						created.Original = o
+						created.GridSize = gridSize
+						created.DirtyParent = dirtyParent
+						created.DestructionID = destructionID
+						table.insert(dividing, created)
+					end
 				end
-				table.move(createdParts, 1, #createdParts, #dividing + 1, dividing)
 			else
+				voxelCount += 1
 				table.insert(voxels, toDivide)
 			end
 		else
@@ -619,19 +1078,14 @@ local function ImaginaryVoxels(params, frameLimit, toDestroy)
 	--]]
 
 	-- create new static parts
+	--
 	for _, ibox in ipairs(creating) do
-		local P = ibox.Original
-
-		local newStatic = Instance.new("Part")
-		newStatic.Material = P.Material
-		newStatic.Transparency = P.Transparency
-		newStatic.Reflectance = P.Reflectance
-		newStatic.Color = P.Color
-		newStatic.Anchored = P.Anchored
+		local newStatic = PartFromTemplate(ibox.Original)
 		newStatic.CFrame = ibox.CFrame
 		newStatic.Size = ibox.Size
 		newStatic.Parent = ibox.DirtyParent
 	end
+	--]]
 
 	-- destroy original parts
 	for _, part in ipairs(toDestroy) do
@@ -651,7 +1105,7 @@ local function PopShatterQueue()
 
 		shatterPart, partsInPart = v.CuttingPart, {}
 
-		for _, part in ipairs( GetDestructibleParts(v.ID, shatterPart, v.FilterTagged, true, v.replicated) ) do
+		for _, part in ipairs( GetDestructibleParts(v.ID, shatterPart, v.GridSize, v.FilterTagged, v.replicated) ) do
 
 			if part:HasTag("ShatterboxDebris") then
 				HandleVoxelDestruction(v.OnVoxelDestruct, part, part.Parent, shatterPart, not Shatterbox.PartEncapsulatesBlockPart(shatterPart, part), unpack(v.DestructParameters))
@@ -789,11 +1243,80 @@ local function HeartbeatWorker(deltaTime)
 	--end
 	--]]
 
+	--
+	if Settings.UseGreedyMeshing and ActiveGMWorkerCount < Settings.GMWorkerCount then
+
+		local AvailableDirtyGroups = {}
+
+		for DestructionID, dirties in pairs(FlaggedDirty) do
+			local found = false
+			for _, info in ipairs(ShatterQueue) do
+				if info.ID == DestructionID then
+					found = true
+					break
+				end
+			end
+			if found then continue end
+
+			found = false
+			for _, dirty in ipairs(dirties) do
+				if GreedyWorkers[dirty.DirtyParent] then
+					found = true
+					break
+				end
+			end
+			if found then continue end
+
+			AvailableDirtyGroups[DestructionID] = dirties
+		end
+
+		local DestructionID, Dirties = next(AvailableDirtyGroups)
+
+		while DestructionID and ActiveGMWorkerCount < Settings.GMWorkerCount do
+
+			if #Dirties == 0 then
+				FlaggedDirty[DestructionID] = nil
+				DestructionID, Dirties = next(AvailableDirtyGroups, DestructionID)
+				continue
+			end
+
+			local dirtyInfo = table.remove(Dirties)
+			local DirtyParent = dirtyInfo.DirtyParent
+
+			if #DirtyParent:GetChildren() == 0 then continue end
+
+			local thr = coroutine.create(GreedyMeshWorker)
+
+			GreedyWorkers[DirtyParent] = thr
+			ActiveGMWorkerCount += 1
+
+			coroutine.resume(thr, DirtyParent, dirtyInfo.GridSize)
+		end
+	end
+
+	if Settings.UseGreedyMeshing then
+		for DirtyParent, worker in pairs(GreedyWorkers) do
+			local status = coroutine.status(worker)
+
+			if status == "dead" or (status == "suspended" and GreedyWorkersTerminationFlags[DirtyParent]) then
+				GreedyWorkersTerminationFlags[DirtyParent] = nil
+				GreedyWorkers[DirtyParent] = nil
+				ActiveGMWorkerCount -= 1
+
+			elseif status == "suspended" then
+				coroutine.resume(worker)
+			end
+		end
+	end
+	--]]
+
+
 	frameDivs = 0
 
 	while #ShatterQueue > 0 and frameDivs < Settings.MaxDivisionsPerFrame do
 		ShatterWorker()
 	end
+
 
 	if isClient then return end
 
@@ -841,20 +1364,7 @@ end
 
 
 
-local function SerializedPartInstance(p)
-	return {
-		CFrame = p.CFrame,
-		Size = p.Size,
 
-		Color = p.Color,
-		Material = p.Material.Value,
-		Transparency = p.Transparency,
-		Reflectance = p.Reflectance,
-
-		Tags = p:GetTags(),
-		GridSize = p:GetAttribute("GridSize")
-	}
-end
 
 local function SerializedCuttingPart(p)
 	return {
@@ -883,24 +1393,12 @@ local function CreateReplicatedMapParts(ID, mapParts)
 	if not mapParts then return end
 
 	for _, serialPart in ipairs(mapParts) do
-		local Part = Instance.new("Part")
-		Part.Anchored = true
+		local Part = PartFromTemplate(serialPart)
 		Part.Size = serialPart.Size
 		Part.CFrame = serialPart.CFrame
-
-		Part.Color = serialPart.Color
-		Part.Material = Enum.Material:FromValue(serialPart.Material)
-		Part.Transparency = serialPart.Transparency
-		Part.Reflectance = serialPart.Reflectance
-
-		Part:SetAttribute("GridSize", serialPart.GridSize)
-		for _, tag in ipairs(serialPart.Tags) do
-			Part:AddTag(tag)
-		end
-
 		Part.Parent = clientMapFolder
 
-		if ID then MarkDirty(ID, Part) end
+		if ID then MarkDirty(ID, serialPart.GridSize, Part) end
 	end
 end
 
@@ -944,15 +1442,10 @@ end
 
 local function CreatePuppets(puppets)
 	for _, puppet in ipairs(puppets) do
-		local Part = Instance.new("Part")
+		local Part = PartFromTemplate(puppet)
 		Part:AddTag(IndestructibleTag)
-		Part.Anchored = true
-		Part.Color = puppet.Color
 		Part.Size = puppet.Size
 		Part.CFrame = puppet.CFrame
-		Part.Material = Enum.Material:FromValue(puppet.Material)
-		Part.Transparency = puppet.Transparency
-		Part.Reflectance = puppet.Reflectance
 		Part.Parent = tmpFolder
 
 		Puppets[puppet.GUID] = Part
@@ -1007,15 +1500,11 @@ local function ReplicateMapToNewPlayer(plr)
 			end
 			table.insert(filterDesc, dirty.model)
 			local p = dirty.Part
-			local serialDirtied = {}
+			local serialDirtied = SerializedPartInstance(p, true)
 			serialDirtied.OriginalPart = { CFrame = p.CFrame, Size = p.Size }
 			serialDirtied.Children = serialChildren
-			serialDirtied.GridSize = p:GetAttribute("GridSize")
-			serialDirtied.Tags = p:GetTags()
-			serialDirtied.Color = p.Color
-			serialDirtied.Material = p.Material.Value
-			serialDirtied.Transparency = p.Transparency
-			serialDirtied.Reflectance = p.Reflectance
+			serialDirtied.GridSize = dirty.GridSize
+
 			table.insert(serialDirties, serialDirtied)
 		end
 		table.insert(replicatedDirties, {
@@ -1024,7 +1513,6 @@ local function ReplicateMapToNewPlayer(plr)
 		})
 	end
 
-	local overlapParams = OverlapParams.new()
 	overlapParams.FilterType = Enum.RaycastFilterType.Include
 	overlapParams.FilterDescendantsInstances = filterDesc
 
@@ -1048,48 +1536,37 @@ local function ReplicateMapFromServer(SerialOpDirties, mapParts)
 	for _, serialOpDirty in ipairs(SerialOpDirties) do
 		local dirtied = {}
 
-		for _, serialDirtied in ipairs(serialOpDirty.Dirties) do
-			local C = serialDirtied.Color
-			local M = Enum.Material:FromValue(serialDirtied.Material)
-			local T = serialDirtied.Transparency
-			local R = serialDirtied.Reflectance
+		local ID = serialOpDirty.ID
 
-			local replicatedOriginal = Instance.new("Part")
-			replicatedOriginal.Anchored = true
+		for _, serialDirtied in ipairs(serialOpDirty.Dirties) do
+
+			local replicatedOriginal = PartFromTemplate(serialDirtied)
 			replicatedOriginal.CFrame = serialDirtied.OriginalPart.CFrame
 			replicatedOriginal.Size = serialDirtied.OriginalPart.Size
-			replicatedOriginal.Color = C
-			replicatedOriginal.Material = M
-			replicatedOriginal.Transparency = T
-			replicatedOriginal.Reflectance = R or 0
-			replicatedOriginal:SetAttribute("GridSize", serialDirtied.GridSize)
 
-			local model = Instance.new("Model");
+			local model = Instance.new("Model")
 			model:AddTag("ShatterboxInstance")
-			model:SetAttribute("GridSize", serialDirtied.GridSize)
-
+			model:SetAttribute("GridSize", serialDirtied.Attributes.GridSize)
 			for _, tag in ipairs(serialDirtied.Tags) do
-				replicatedOriginal:AddTag(tag)
 				model:AddTag(tag)
 			end
 
 			for _, serialChild in ipairs(serialDirtied.Children) do
-				local Part = Instance.new("Part")
-				Part.Anchored = true
+				local Part = PartFromTemplate(serialDirtied)
 				Part.Size = serialChild.Size
 				Part.CFrame = serialChild.CFrame
-				Part.Color = C
-				Part.Material = M
-				Part.Transparency = T
-				Part.Reflectance = R or 0
 				Part.Parent = model
+			end
+
+			if Settings.UseGreedyMeshing then
+				FlagDirty(ID, serialDirtied.GridSize, model)
 			end
 
 			model.Parent = clientMapFolder
 			table.insert(dirtied, { model = model, Part = replicatedOriginal })
 		end
 
-		opDirties[serialOpDirty.ID] = dirtied
+		opDirties[ID] = dirtied
 	end
 
 	CreateReplicatedMapParts(nil, mapParts)
@@ -1193,7 +1670,7 @@ function Shatterbox.Destroy(intersectingPart : Part | Model | Types.DestructionP
 
 		params.ID = params.ID or HttpService:GenerateGUID(false)
 
-		if #GetDestructibleParts(params.ID, params.CuttingPart, params.FilterTagged, true) == 0 then
+		if #GetDestructibleParts(params.ID, params.CuttingPart, params.GridSize, params.FilterTagged) == 0 then
 			return
 		end
 
@@ -1229,7 +1706,7 @@ function Shatterbox.ImaginaryVoxels(intersectingPart : Part | Model | Types.Imag
 
 	params.ID = params.ID or HttpService:GenerateGUID(false)
 
-	if #GetDestructibleParts(params.ID, params.CuttingPart, params.FilterTagged, true) == 0 then
+	if #GetDestructibleParts(params.ID, params.CuttingPart, params.GridSize, params.FilterTagged) == 0 then
 		return voxels
 	end
 
@@ -1249,6 +1726,11 @@ end
 -- resets all modified parts to where they originally were (turning the map back to normal)
 function Shatterbox.Reset()
 	ShatterQueue = {}
+
+	for dirtyParent in pairs(GreedyWorkers) do
+		GreedyWorkersTerminationFlags[dirtyParent] = true
+	end
+	while ActiveGMWorkerCount > 0 do RunService.Heartbeat:Wait() end
 
 	tmpFolder:ClearAllChildren()
 
@@ -1418,7 +1900,6 @@ end
 
 
 Shatterbox.OnVoxelDestruct = HandleVoxelDestruction
-
 
 if isServer then
 	if USE_CLIENT_SERVER then

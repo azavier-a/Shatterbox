@@ -1,8 +1,15 @@
+map AttributesMap = { [string]: unknown }
+
 struct PartProperties {
 	Color : Color3,
 	Material : u16(256..2311),
 	Transparency : f16,
-	Reflectance : f16?
+	Reflectance : f16?,
+	MaterialVariant : string?,
+	CollisionGroup : string,
+
+	Attributes : AttributesMap,
+	Tags : string[]
 }
 
 struct Box {
@@ -16,17 +23,10 @@ struct Hitbox {
 	Shape : u8(0..4)
 }
 
-struct Destructible {
-	GridSize : f16?,
-	Tags : string[]
-}
-
 struct PartInstance {
 	..Box,
 
-	..PartProperties,
-
-	..Destructible
+	..PartProperties
 }
 
 struct Puppet {
@@ -40,8 +40,6 @@ struct Puppet {
 struct Dirtied {
 	OriginalPart : Box,
 	Children : Box[],
-	
-	..Destructible,
 
 	..PartProperties
 }

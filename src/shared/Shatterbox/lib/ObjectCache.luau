@@ -62,6 +62,13 @@ end
 function Cache:GetPart(PartCFrame: CFrame?): BasePart
 	local Part = table.remove(self._FreeObjects) or self:_GetNew(self._ExpandAmount, true)
 
+	for _, tag in ipairs(Part:GetTags()) do -- I added these two loops, not sure if it's the best placement
+		Part:RemoveTag(tag)
+	end
+	for att in pairs(Part:GetAttributes()) do
+		Part:SetAttribute(att)
+	end
+
 	self._Objects[Part] = nil
 	if PartCFrame then
 		table.insert(MovingParts, Part)
