@@ -1324,7 +1324,8 @@ local function HeartbeatWorker(deltaTime)
 	if PQL > 0 then
 		local toReplicate = {}
 		for _ = 1, math.min(PQL, Settings.PuppetReplicationFrameLimit) do
-			local GUID, voxel = unpack(table.remove(CreatePuppetQueue))
+			local removeLast = table.remove(CreatePuppetQueue)
+			local GUID, voxel = unpack(removeLast)
 			table.insert(toReplicate, {
 				GUID = GUID,
 				CFrame = voxel.CFrame,
@@ -1332,7 +1333,11 @@ local function HeartbeatWorker(deltaTime)
 				Material = voxel.Material.Value,
 				Color = voxel.Color,
 				Transparency = voxel.Transparency,
-				Reflectance = voxel.Reflectance
+				Reflectance = voxel.Reflectance,
+				CollisionGroup = voxel.CollisionGroup,
+				Attributes = voxel:GetAttributes(),
+				Tags = voxel:GetTags(),
+				MaterialVariant = voxel.MaterialVariant
 			})
 		end
 		ServerEvents.CreatePuppets.FireAll(toReplicate)
