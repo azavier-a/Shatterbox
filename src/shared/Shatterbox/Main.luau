@@ -1526,6 +1526,9 @@ end
 
 
 local function ReplicateMapFromServer(SerialOpDirties, mapParts)
+	if clientMapFolder then
+		clientMapFolder:ClearAllChildren()
+	end
 
 	for _, serialOpDirty in ipairs(SerialOpDirties) do
 		local dirtied = {}
@@ -1533,14 +1536,14 @@ local function ReplicateMapFromServer(SerialOpDirties, mapParts)
 		local ID = serialOpDirty.ID
 
 		for _, serialDirtied in ipairs(serialOpDirty.Dirties) do
-
 			local replicatedOriginal = PartFromTemplate(serialDirtied)
 			replicatedOriginal.CFrame = serialDirtied.OriginalPart.CFrame
 			replicatedOriginal.Size = serialDirtied.OriginalPart.Size
 
 			local model = Instance.new("Model")
+			model.Name = replicatedOriginal.Name
 			model:AddTag("ShatterboxInstance")
-			model:SetAttribute("GridSize", serialDirtied.Attributes.GridSize)
+			model:SetAttribute("GridSize", serialDirtied.GridSize or serialDirtied.Attributes and serialDirtied.Attributes.GridSize)
 			for _, tag in ipairs(serialDirtied.Tags) do
 				model:AddTag(tag)
 			end
@@ -1552,8 +1555,10 @@ local function ReplicateMapFromServer(SerialOpDirties, mapParts)
 				Part.Parent = model
 			end
 
+			replicatedOriginal.Parent = model
+
 			if Settings.UseGreedyMeshing then
-				FlagDirty(ID, serialDirtied.GridSize, model)
+				FlagDirty(ID, serialDirtied.GridSize or serialDirtied.Attributes and serialDirtied.Attributes.GridSize, model)
 			end
 
 			model.Parent = clientMapFolder
