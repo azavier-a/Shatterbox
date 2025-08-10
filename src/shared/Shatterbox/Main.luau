@@ -54,6 +54,7 @@ local PathToServer = lib:WaitForChild("Server")
 	end
 	SV.Value = S;
 ]]
+local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local isServer, isClient = RunService:IsServer(), RunService:IsClient()
 
@@ -157,15 +158,6 @@ local function RegisterOnVoxelDestruct(name : string, client : Types.OnVoxelDest
 end
 
 if isServer then
-	if USE_CLIENT_SERVER then
-		local ref = Instance.new("ObjectValue")
-		ref.Name = "ShatterboxModule"
-		ref.Value = script
-		local scr = lib.InitializeShatterbox
-		ref.Parent = scr
-		scr.Parent = game:GetService("StarterPlayer"):WaitForChild("StarterPlayerScripts")
-		scr.Enabled = true
-	end
 	ServerEvents = require(PathToServer).Shatterbox
 
 	local serverEffects = require(script.Parent.effects.Server)
@@ -191,7 +183,6 @@ local TweenService = game:GetService("TweenService")
 local HttpService = game:GetService("HttpService")
 
 local VertexMath = require(lib:WaitForChild("VertexMath"))
-local TaggedArray = require(script.Parent:WaitForChild("util"):WaitForChild("TaggedArray"))
 local PartEncapsulatesBlockPart = VertexMath.PartEncapsulatesBlockPart
 local GetVerts, GetNormals = VertexMath.GetVerts, VertexMath.GetNormals
 local BlockVerts, BlockNormals = GetVerts.Block, GetNormals.Block
@@ -860,10 +851,18 @@ end
 local function HandleVoxelDestruction(callbackName : string?, voxel : Part, dirtyParent : Model, intersectingPart : BasePart, isEdge : boolean, ... : any)
 	if not voxel:HasTag("ShatterboxDebris") then voxel.Parent = tmpFolder end
 	local args = { ... }
-	coroutine.wrap(function()
-		OnVoxelDestructRegistry[callbackName](voxel, dirtyParent, intersectingPart, isEdge, unpack(args))
-		voxel:AddTag("ShatterboxDebris")
-	end)()
+
+	local thr = coroutine.create(function()
+		local s, e = pcall(function()
+			OnVoxelDestructRegistry[callbackName](voxel, dirtyParent, intersectingPart, isEdge, unpack(args))
+			voxel:AddTag("ShatterboxDebris")
+		end)
+		if not s then
+			warn("Voxel destruction failed: " .. e)
+		end
+	end)
+
+	coroutine.resume(thr)
 end
 
 
@@ -1553,7 +1552,7 @@ local function ReplicateMapFromServer(SerialOpDirties, mapParts)
 			end
 
 			if Settings.UseGreedyMeshing then
-				FlagDirty(ID, serialDirtied.GridSize, model)
+				FlagDirty(ID, serialDirtied.Attributes.GridSize, model)
 			end
 
 			model.Parent = clientMapFolder
