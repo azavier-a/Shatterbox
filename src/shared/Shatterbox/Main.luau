@@ -1496,7 +1496,6 @@ local function ReplicateMapToNewPlayer(plr)
 			local serialDirtied = SerializedPartInstance(p, true)
 			serialDirtied.OriginalPart = { CFrame = p.CFrame, Size = p.Size }
 			serialDirtied.Children = serialChildren
-			serialDirtied.GridSize = dirty.GridSize
 
 			table.insert(serialDirties, serialDirtied)
 		end
@@ -1659,6 +1658,8 @@ function Shatterbox.Destroy(intersectingPart : Part | Model | Types.DestructionP
 
 	task.defer(function()
 
+		RunService.Heartbeat:Wait()
+
 		if params.CleanupDelay < 0 then return end
 
 		params.ID = params.ID or HttpService:GenerateGUID(false)
@@ -1767,7 +1768,7 @@ function Shatterbox.CreateHitbox()
 	hitbox.FilterTagged = nil :: (string | {string})?
 	hitbox.OnVoxelDestruct = nil :: string?
 	hitbox.DestructParameters = {} :: {any}
-	hitbox.OperationCompletedCallback = nil :: (() -> ())?
+	hitbox.OnDestructCompleted = nil :: (() -> ())?
 	hitbox.CleanupDelay = nil :: number?
 	hitbox.DestructDelay = nil :: number?
 	hitbox.GridSize = nil :: number?
