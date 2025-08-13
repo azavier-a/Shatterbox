@@ -94,13 +94,13 @@ Settings.UsePriorityQueue = true
 
 Settings.PrioritizeRecentN = 10
 
-Settings.PuppetReplicationFrequency = 10 -- 10 fps/Hz target replication frequency
+Settings.PuppetReplicationFrequency = 20 -- 20 fps/Hz target replication frequency
 
 Settings.ClientTweenPuppets = true
 
 Settings.PuppetReplicationFrameLimit = 10
 
-Settings.PuppetSleepVelocity = 0.001
+Settings.PuppetSleepVelocity = 0.1
 
 Settings.SkipInstanceCheck = function(i : Instance)
 
@@ -383,6 +383,8 @@ local function GreedyMeshWorker(DirtyParent : Model, GridSize : number?)
 	local count = 0
 
 	for _, child in ipairs(DirtyParent:GetChildren()) do
+		if child:HasTag("ShatterboxDebris") then continue end
+
 		local gridInfo, n = InitGreedyState(child, GridSize, groupMin, State, DIMYDIMZ, DIMZ)
 		if n > 0 then
 			count += n
@@ -881,9 +883,7 @@ local function GetDestructibleParts(ID, cuttingPart, GridSize, filterTagged, rep
 
 	for _, part in ipairs( workspace:GetPartsInPart(IntersectingPart, op) ) do
 
-		if replicated and not part:IsDescendantOf(clientMapFolder) then continue end
-
-		if ShouldSkipInstance(part) then continue end
+		if (replicated and not part:IsDescendantOf(clientMapFolder)) or ShouldSkipInstance(part) then continue end
 
 		-- adds this part to the smooth cleanup for this destruction, if it's not already destroyed by something else
 		MarkDirty(ID, GridSize, part)
@@ -924,8 +924,8 @@ end
 
 
 local function ImaginaryVoxels(params, frameLimit, toDestroy)
+	local voxels = {} :: {Types.ImaginaryVoxel}
 	local voxelCount = 0
-	local voxels = setmetatable({}, { __len = function() return voxelCount end }) :: {Types.ImaginaryVoxel}
 
 	toDestroy = toDestroy or GetDestructibleParts(params.ID, params.CuttingPart, params.GridSize, params.FilterTagged, params.replicated)
 
@@ -996,72 +996,88 @@ local function ImaginaryVoxels(params, frameLimit, toDestroy)
 			table.remove(verts, intersected)
 		end
 
+		if frameLimit then frameDivs += 1 end
+
 		if intersected then
 			local s, o, gridSize, dirtyParent, destructionID = toDivide.Size, toDivide.Original, toDivide.GridSize, toDivide.DirtyParent, toDivide.DestructionID
 
-			if PartContainsAllVerts(cuttingPart, verts or BlockVerts(toDivide.CFrame, toDivide.Size)) then
-				if params.SkipEncapsulatedVoxels then
-					local voxelCountAxis = toDivide.Size // gridSize
-					voxelCount += voxelCountAxis.X*voxelCountAxis.Y*voxelCountAxis.Z
-				else
-					local createdParts = ImaginaryVoxelize(toDivide, gridSize)
-					voxelCount += #createdParts
-					for _, created in ipairs(createdParts) do
-						created.Original = o
-						created.GridSize = gridSize
-						created.DirtyParent = dirtyParent
-						created.DestructionID = destructionID
-					end
-					table.move(createdParts, 1, #createdParts, #voxels + 1, voxels)
-				end
+			local voxelCountAxis = Vector3.one:Max(s // gridSize)
+			local toDivideVoxelContributions = voxelCountAxis.X*voxelCountAxis.Y*voxelCountAxis.Z
+
+			-- if toDivide is literally only a single voxel large and cannot divide, add it as a voxel
+			if toDivideVoxelContributions == 1 then
+
+				voxelCount += toDivideVoxelContributions
+				table.insert(voxels, toDivide)
+
+				-- toDivide is done being procesed
 				continue
 			end
 
+			-- if toDivide is encapsulated within CuttingPart, there is no need to run expensive division algorithm
+			if PartContainsAllVerts(cuttingPart, verts or BlockVerts(toDivide.CFrame, toDivide.Size)) then
+
+				-- The encapsulated part contributes this many voxels
+				voxelCount += toDivideVoxelContributions
+
+				-- if SkipEncapsulatedVoxels, do nothing and skip the encapsulated part
+				if params.SkipEncapsulatedVoxels then continue end
+
+				-- otherwise, use ImaginaryVoxelize to turn the encapsulated part into it's constituent voxels
+				local newVoxels = ImaginaryVoxelize(toDivide, gridSize)
+				for _, created in ipairs(newVoxels) do
+					created.Original = o
+					created.GridSize = gridSize
+					created.DirtyParent = dirtyParent
+					created.DestructionID = destructionID
+				end
+				-- add them to the list of voxels
+				table.move(newVoxels, 1, #newVoxels, #voxels + 1, voxels)
+
+				-- toDivide is done being processed
+				continue
+			end
+
+			-- if toDivide is not encapsulated within CuttingPart, it lies along the edge of the destruction
 			toDivide.isEdge = true
 
 			local sx,sy,sz = s.X, s.Y, s.Z
-			if sx <= gridSize and sy <= gridSize and sz <= gridSize then
-				voxelCount += 1
-				table.insert(voxels, toDivide)
-				continue
-			end
-
 			local minsize, maxsize = math.min(sx, sy, sz), math.max(sx, sy, sz)
-			local Subdivide = SubdivideFunctions[(maxsize > 2 * minsize) and "KD" or "MOT"]
 
-			if frameLimit then frameDivs += 1 end
+			-- use Subdivide (either KD or MOT to subdivide toDivide)
+			for _, created in ipairs(SubdivideFunctions[(maxsize > 2 * minsize) and "KD" or "MOT"](toDivide, gridSize)) do
 
-			local createdParts = Subdivide(toDivide, gridSize)
-			if createdParts then
-				for _, created in ipairs(createdParts) do
-					if PartContainsAllVerts(cuttingPart, BlockVerts(created.CFrame, created.Size)) then
-						if params.SkipEncapsulatedVoxels then
-							local voxelCountAxis = created.Size // gridSize
-							voxelCount += voxelCountAxis.X*voxelCountAxis.Y*voxelCountAxis.Z
-						else
-							local newVoxels = ImaginaryVoxelize(toDivide, gridSize)
-							voxelCount += #newVoxels
-							for _, v in ipairs(newVoxels) do
-								v.Original = o
-								v.GridSize = gridSize
-								v.DirtyParent = dirtyParent
-								v.DestructionID = destructionID
-							end
-							table.move(newVoxels, 1, #newVoxels, #voxels + 1, voxels)
-						end
-					else
-						created.Original = o
-						created.GridSize = gridSize
-						created.DirtyParent = dirtyParent
-						created.DestructionID = destructionID
-						table.insert(dividing, created)
-					end
+				-- early encapsulation check on the children parts because encapsulation checks are faster than intersection checks
+				if not PartContainsAllVerts(cuttingPart, BlockVerts(created.CFrame, created.Size)) then
+
+					created.Original = o
+					created.GridSize = gridSize
+					created.DirtyParent = dirtyParent
+					created.DestructionID = destructionID
+					table.insert(dividing, created)
+
+					continue
 				end
-			else
-				voxelCount += 1
-				table.insert(voxels, toDivide)
+
+				local countAxis = Vector3.one:Max(created.Size // gridSize)
+				-- the encapsulated child contributes this many voxels
+				voxelCount += countAxis.X*countAxis.Y*countAxis.Z
+
+				if params.SkipEncapsulatedVoxels then continue end
+
+				-- if not SkipEncapsulatedVoxels, use ImaginaryVoxelize to turn the child into its constituent voxels
+				local newVoxels = ImaginaryVoxelize(created, gridSize)
+				for _, v in ipairs(newVoxels) do
+					v.Original = o
+					v.GridSize = gridSize
+					v.DirtyParent = dirtyParent
+					v.DestructionID = destructionID
+				end
+				-- add these new voxels to the list of voxels
+				table.move(newVoxels, 1, #newVoxels, #voxels + 1, voxels)
 			end
 		else
+			-- if the toDivide part is not intersecting the CuttingPart, it is a static part
 			table.insert(creating, toDivide)
 		end
 	end
@@ -1091,7 +1107,7 @@ local function ImaginaryVoxels(params, frameLimit, toDestroy)
 		part:Destroy()
 	end
 
-	return voxels :: {Types.ImaginaryVoxel}
+	return setmetatable(voxels, { __len = function() return voxelCount end }) :: {Types.ImaginaryVoxel}
 end
 
 
@@ -1333,8 +1349,9 @@ local function HeartbeatWorker(deltaTime)
 
 	accum += deltaTime
 	local P = 1 / Settings.PuppetReplicationFrequency
-	while accum > P do
-		accum -= P
+	if accum > P then
+		while accum > P do accum -= P end
+
 		local puppetStates = {}
 		for guid, puppetVoxel in pairs(Puppets) do
 
@@ -1344,14 +1361,17 @@ local function HeartbeatWorker(deltaTime)
 			end
 			if found then continue end
 
-			if puppetVoxel.AssemblyLinearVelocity.Magnitude < Settings.PuppetSleepVelocity then continue end
+			if puppetVoxel.AssemblyLinearVelocity.Magnitude <= Settings.PuppetSleepVelocity then continue end
+
 			table.insert(puppetStates, {
 				GUID = guid,
 				CFrame = puppetVoxel.CFrame
 			})
 		end
-		if #puppetStates == 0 then return end
-		ServerEvents.ReplicatePuppetStates.FireAll(puppetStates)
+
+		if #puppetStates > 0 then
+			ServerEvents.ReplicatePuppetStates.FireAll(puppetStates)
+		end
 	end
 end
 
@@ -1591,13 +1611,19 @@ Shatterbox.Settings = Settings
 function Shatterbox.Puppeteer(voxel : Part)
 	assert(isServer, "This function can only be called from the server")
 
+	voxel.Anchored = false
+
 	voxel:AddTag(IndestructibleTag)
 	voxel.Parent = workspace.CurrentCamera
-	if not voxel.Anchored then voxel:SetNetworkOwner(nil) end
+
+	local s, e = pcall(voxel.SetNetworkOwner, voxel, nil)
+	if not s then
+		warn("Failed to set the network owner of the Puppet, is it welded to an anchored part?\n" .. e)
+	end
 
 	local noSleepCon : RBXScriptConnection
 	noSleepCon = RunService.Heartbeat:Connect(function(deltaTime)
-		voxel:ApplyImpulse(Vector3.yAxis * -0.0001)
+		voxel:ApplyImpulse(Vector3.yAxis * -0.00001)
 	end)
 
 	local guid = HttpService:GenerateGUID(false)
@@ -1714,6 +1740,18 @@ function Shatterbox.ImaginaryVoxels(intersectingPart : Part | Model | Types.Imag
 	if params.CleanupDelay > 0 and Settings.UseSmoothCleanup then task.delay(params.CleanupDelay, UndoDirtyOp, params.ID) end
 
 	return ImaginaryVoxels(params)
+end
+
+-- Will return a created voxel using the supplied ImaginaryVoxel, will automatically parent the voxel to the ShatterboxTemporary folder and give it the "ShatterboxDebris" tag
+function Shatterbox.InstantiateImaginaryVoxel(ImaginaryVoxel : Types.ImaginaryVoxel)
+
+	local voxel = ImaginaryVoxel.Original:Clone()
+	voxel.CFrame = ImaginaryVoxel.CFrame
+	voxel.Size = ImaginaryVoxel.Size
+	voxel:AddTag("ShatterboxDebris")
+	voxel.Parent = tmpFolder
+
+	return voxel
 end
 
 
