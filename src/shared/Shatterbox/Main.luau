@@ -2,7 +2,7 @@
 --!optimize 2
 
 
--- Shatterbox release 7.8 beta 2
+-- Shatterbox release 7.8 beta 3
 
 
 --#selene: allow(multiple_statements)
