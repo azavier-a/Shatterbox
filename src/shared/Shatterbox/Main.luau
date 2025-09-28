@@ -1544,26 +1544,25 @@ end
 
 
 local function ReplicateMapFromServer(SerialOpDirties, mapParts)
-
-	for _, serialOpDirty in ipairs(SerialOpDirties) do
+	for _, serialOpDirty in (SerialOpDirties) do
 		local dirtied = {}
 
 		local ID = serialOpDirty.ID
 
-		for _, serialDirtied in ipairs(serialOpDirty.Dirties) do
-
+		for _, serialDirtied in (serialOpDirty.Dirties) do
+			local parent = serialDirtied.Parent
 			local replicatedOriginal = PartFromTemplate(serialDirtied)
 			replicatedOriginal.CFrame = serialDirtied.OriginalPart.CFrame
 			replicatedOriginal.Size = serialDirtied.OriginalPart.Size
 
 			local model = Instance.new("Model")
 			model:AddTag("ShatterboxInstance")
-			model:SetAttribute("GridSize", serialDirtied.Attributes.GridSize)
-			for _, tag in ipairs(serialDirtied.Tags) do
+			model:SetAttribute("GridSize", serialDirtied.GridSize or serialDirtied.Attributes and serialDirtied.Attributes.GridSize)
+			for _, tag in (serialDirtied.Tags) do
 				model:AddTag(tag)
 			end
 
-			for _, serialChild in ipairs(serialDirtied.Children) do
+			for _, serialChild in (serialDirtied.Children) do
 				local Part = PartFromTemplate(serialDirtied)
 				Part.Size = serialChild.Size
 				Part.CFrame = serialChild.CFrame
@@ -1571,11 +1570,14 @@ local function ReplicateMapFromServer(SerialOpDirties, mapParts)
 			end
 
 			if Settings.UseGreedyMeshing then
-				FlagDirty(ID, serialDirtied.Attributes.GridSize, model)
+				FlagDirty(ID, serialDirtied.GridSize or serialDirtied.Attributes and serialDirtied.Attributes.GridSize, model)
 			end
 
 			model.Parent = clientMapFolder
 			table.insert(dirtied, { model = model, Part = replicatedOriginal })
+			model.Destroying:Once(function()
+				replicatedOriginal.Parent=parent
+			end)
 		end
 
 		opDirties[ID] = dirtied
