@@ -11,6 +11,17 @@
 ]=]
 local Settings = {}
 
+
+Settings.INDESTRUCTIBLE_TAG = "Indestructible"
+
+Settings.DEBRIS_TAG = "ShatterboxDebris"
+
+Settings.DIRTY_GROUP_ID_ATTRIBUTE_NAME = "DirtyGroupID"
+
+--Settings.ROOT_TAG = "Root"
+--Settings.FALLING_GROUP_TAG = "FallingGroup"
+
+
 --[=[
 	Set this to false if you don't want to use client-server functionality (false = fully server side destructions).
 
@@ -31,7 +42,7 @@ Settings.USE_CLIENT_SERVER = true
 	@within Settings
 	@readonly
 ]=]
-Settings.USE_OBJECT_CACHE = true
+Settings.USE_OBJECT_CACHE = false
 	--[=[
 		The initial size of the ObjectCache.
 
@@ -40,7 +51,6 @@ Settings.USE_OBJECT_CACHE = true
 		@readonly
 	]=]
 	Settings.CACHE_INITIAL_SIZE = 5000
-
 
 
 --[=[

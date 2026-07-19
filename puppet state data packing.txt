@@ -1,0 +1,34 @@
+
+
+i25 - X
+i25 - Y
+i25 - Z
+
+u8 - aX
+u8 - aY
+u8 - aZ
+
+u13 - Puppet ID
+
+Total : 112 bits per puppet state (14 bytes)
+
+Restriction : Puppets must be within 16k studs of the origin
+
+
+
+
+
+
+
+Delta Positions:
+
+i15, i15, i15 - Delta Position X, Y, Z
+
+u8, u8, u8 - Rotation X, Y, Z
+
+u11 - Puppet ID
+
+
+Total : 80 bits per puppet state (10 bytes)
+
+Restriction : Puppets cannot move faster than 320 studs per second

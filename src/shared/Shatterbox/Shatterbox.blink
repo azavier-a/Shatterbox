@@ -1,5 +1,5 @@
-option ServerOutput = "./lib/Blink/Server.luau"
-option ClientOutput = "./lib/Blink/Client.luau"
+option ServerOutput = "./core/Blink/Server.luau"
+option ClientOutput = "./core/Blink/Client.luau"
 
 option ManualReplication = true
 
@@ -123,12 +123,6 @@ struct DirtyGroupDataType {
 
 
 
-
-event SignalClearQueue {
-	From: Server,
-	Type: Reliable,
-	Call: ManyAsync
-}
 
 event SignalReset {
 	From: Server,
