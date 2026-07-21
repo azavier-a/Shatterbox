@@ -89,7 +89,7 @@ end
 local ClientSideCallbacks = {}
 
 -- Do not use this function, it just lets you use the Shatterbox functions in this module (avoiding a cyclic dependancy)
-function ClientSideCallbacks:SetReference(shatterbox) Shatterbox = shatterbox end
+function ClientSideCallbacks:SetReference(shatterbox) Shatterbox = shatterbox; ClientSideCallbacks.SetReference = nil end
 
 ClientSideCallbacks.OnVoxelDestruct = ClientEffects
 ClientSideCallbacks.OnDestructCompleted = DestructCompleted

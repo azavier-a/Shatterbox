@@ -149,7 +149,7 @@ end
 local ServerSideCallbacks = {}
 
 -- Do not use this function, it just lets you use the Shatterbox functions in this module (avoiding a cyclic dependancy)
-function ServerSideCallbacks:SetReference(shatterbox) Shatterbox = shatterbox end
+function ServerSideCallbacks:SetReference(shatterbox) Shatterbox = shatterbox; ServerSideCallbacks.SetReference = nil end
 
 ServerSideCallbacks.OnVoxelDestruct = ServerEffects
 ServerSideCallbacks.OnDestructCompleted = DestructCompleted

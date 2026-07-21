@@ -1,135 +1,73 @@
 --!native
 --!optimize 2
 
-
 -- Shatterbox dev build May 12, 2026
-
 
 --#selene: allow(incorrect_standard_library_use)
 
+local RunService = game:GetService("RunService")
+local isServer, isClient = RunService:IsServer(), RunService:IsClient()
 
 local src = script.Parent
 local core = src:WaitForChild("core")
 local components = core:WaitForChild("components")
 local lib = core:WaitForChild("lib")
 
-local RunService = game:GetService("RunService")
-
-local isServer, isClient = RunService:IsServer(), RunService:IsClient()
-
 local Settings = require(src:WaitForChild("Settings"))
-local USE_CLIENT_SERVER = Settings.USE_CLIENT_SERVER
-local USE_OBJECT_CACHE = Settings.USE_OBJECT_CACHE
-local DirtyGroupIDAttribute = Settings.DIRTY_GROUP_ID_ATTRIBUTE_NAME
-
 local Types = require(src:WaitForChild("Types"))
-
-local DirtyGroupLogic = require(components:WaitForChild("DirtyGroupLogic"))
-local SmoothCleanupHeartbeatBehavior = DirtyGroupLogic.SmoothCleanupHeartbeatBehavior
-local DestroyPart = DirtyGroupLogic.DestroyPart
-local UndoDirtyGroup = DirtyGroupLogic.UndoDirtyGroup
-
-local ShatterQueueLogic = require(components:WaitForChild("ShatterQueueLogic"))
-local ShatterQueueHeartbeatBehavior = ShatterQueueLogic.ShatterQueueHeartbeatBehavior
-local ModelQueueBehavior = ShatterQueueLogic.ModelQueueBehavior
-local HandleOnVoxelDestruct = ShatterQueueLogic.HandleOnVoxelDestruct
-local HandleOnDestructCompleted = ShatterQueueLogic.HandleOnDestructCompleted
-local GetDestructibleParts = ShatterQueueLogic.GetDestructibleParts
-local ImaginaryVoxels = ShatterQueueLogic.ImaginaryVoxels
-local InstantiateImaginaryVoxel = ShatterQueueLogic.InstantiateImaginaryVoxel
-
-local DeferredInstantiationLogic = require(components:WaitForChild("DeferredInstantiationLogic"))
-local DeferredInstantiationHeartbeatBehavior = DeferredInstantiationLogic.DeferredInstantiationHeartbeatBehavior
-
-local ClientServerLogic = require(components:WaitForChild("ClientServerLogic"))
-local ReplicateStateToPlayer = ClientServerLogic.ReplicateStateToPlayer
-local ReplicateStateFromServer = ClientServerLogic.ReplicateStateFromServer
-local QueueNewPlayerStateReplication = ClientServerLogic.QueueNewPlayerStateReplication
-local SendDirtyGroupsToServer = ClientServerLogic.SendDirtyGroupsToServer
-local CreateDirtyGroupsFromClient = ClientServerLogic.CreateDirtyGroupsFromClient
-local ReplicateDestructionToClients = ClientServerLogic.ReplicateDestructionToClients
-local ReplicateDestructionFromServer = ClientServerLogic.ReplicateDestructionFromServer
-local CreateSerialDirtyGroups = ClientServerLogic.CreateSerialDirtyGroups
-
-local PuppeteerLogic = require(components:WaitForChild("PuppeteerLogic"))
-local PuppeteerHeartbeatBehavior = PuppeteerLogic.PuppeteerHeartbeatBehavior
-local DestroyPuppet = PuppeteerLogic.DestroyPuppet
-local CreatePuppetsFromServer = PuppeteerLogic.CreatePuppetsFromServer
-local ReplicatePuppetStatesFromServer = PuppeteerLogic.ReplicatePuppetStatesFromServer
-
 local Metatables = require(lib:WaitForChild("Metatables"))
-local HitboxMT = Metatables.HitboxMT
 export type ShatterboxHitbox = Metatables.ShatterboxHitbox
 export type ShatterboxDestructionParameters = Metatables.ShatterboxDestructionParameters
 
 local Serializer = require(lib:WaitForChild("Serializer"))
-local ValidateDestructionParams = Serializer.ValidateDestructionParams
-
 local VertexMath = require(lib:WaitForChild("VertexMath"))
 local GetVerts, GetNormals = VertexMath.GetVerts, VertexMath.GetNormals
-local BlockVerts, BlockNormals = GetVerts.Block, GetNormals.Block
-local PartContainsAVert = VertexMath.PartContainsAVert
+
+local DirtyGroupLogic = require(components:WaitForChild("DirtyGroupLogic"))
+local ShatterQueueLogic = require(components:WaitForChild("ShatterQueueLogic"))
+local DeferredInstantiationLogic = require(components:WaitForChild("DeferredInstantiationLogic"))
+local ClientServerLogic = require(components:WaitForChild("ClientServerLogic"))
+local PuppeteerLogic = require(components:WaitForChild("PuppeteerLogic"))
 
 local State = require(core:WaitForChild("State"))
-
 local Blink = State.Blink
-local StepReplication = Blink.StepReplication
 
-local OnVoxelDestructRegistry = State.OnVoxelDestructRegistry
-local OnDestructCompletedRegistry = State.OnDestructCompletedRegistry
 
-local DirtyGroupData = State.DirtyGroupData
-local DirtyGroupMembers = State.DirtyGroupMembers
-
-local SmoothCleanupQueue = State.SmoothCleanupQueue
-
-local GreedyMeshedImaginaryParts = State.GreedyMeshedImaginaryParts
-local ImaginaryCreateQueue = State.ImaginaryCreateQueue
-local ImaginaryDestroyQueue = State.ImaginaryDestroyQueue
-
-local ShatterQueue = State.ShatterQueue
-
-local Puppets = State.Puppets
-
-local PuppetsLerpData = State.PuppetsLerpData
-
-local CreatePuppetQueue = State.CreatePuppetQueue
-
-local NewPlayerStateReplicationQueue = State.NewPlayerStateReplicationQueue
-
--- The Heartbeat cycle of Shatterbox.
-local function HeartbeatWorker(deltaTime)
+local function ShatterboxHeartbeatCycle(deltaTime)
 
 	if Settings.UseSmoothCleanup then
-		coroutine.wrap(SmoothCleanupHeartbeatBehavior)(deltaTime)
+		coroutine.wrap(DirtyGroupLogic.SmoothCleanupHeartbeat)(deltaTime)
 	end
 
-	ShatterQueueHeartbeatBehavior()
+	-- All queued destructions for this frame (from Shatterbox.Destroy) are processed here, without modifying or creating any map parts (only voxel debris are instantiated/destroyed).
+	ShatterQueueLogic.Heartbeat()
 
-	DeferredInstantiationHeartbeatBehavior()
+	-- The state the map should be after all voxel destruction for this frame is now known. The affected dirty groups are Greedy Meshed without modifying or creating any map parts.
+	-- Finally the new map parts are created and the old ones are destroyed (if necessary). This algorithm results in the minimum map part creation/deletion count possible, or as close to it as Greedy Meshing allows.
+	DeferredInstantiationLogic.Heartbeat()
 
-	if #NewPlayerStateReplicationQueue > 0 then
-		for _, plr in ipairs(NewPlayerStateReplicationQueue) do
-			ReplicateStateToPlayer(plr)
+	-- Client-Server makes each client run their own version of Shatterbox (for recv gains and part flashing mitigation with streaming enabled). This ensures new players have their state synchronized with the server.
+	if #State.NewPlayerStateReplicationQueue > 0 then
+		for _, plr in ipairs(State.NewPlayerStateReplicationQueue) do
+			ClientServerLogic.ReplicateStateToPlayer(plr)
 		end
-		table.clear(NewPlayerStateReplicationQueue)
+		table.clear(State.NewPlayerStateReplicationQueue)
 	end
 
+	-- Handle limited replication of the CFrames of voxels that are interpolated on the client side.
 	if isServer then
-		PuppeteerHeartbeatBehavior(deltaTime)
+		PuppeteerLogic.Heartbeat(deltaTime)
 	end
 
-	StepReplication()
+	Blink.StepReplication()
 end
 
 
 --- @class Shatterbox
 local Shatterbox = {}
 
-State.EffectsModuleCallbacks:SetReference(Shatterbox)
-State.EffectsModuleCallbacks = nil
-
 Metatables:SetReference(Shatterbox)
+State.EffectsModuleCallbacks:SetReference(Shatterbox)
 
 Shatterbox.Settings = Settings
 
@@ -205,7 +143,6 @@ Shatterbox.IsPuppet = State.IsPuppet
 	Client:
 	```lua
 	SignalClientPuppetVFX.OnClientEvent:Connect(function(voxelIDs)
-		local Puppets = Shatterbox.Puppets
 
 		for id in pairs(voxelIDs) do
 			local PuppetPart = Shatterbox.GetPuppetAsync(id)
@@ -219,7 +156,7 @@ Shatterbox.IsPuppet = State.IsPuppet
 	@prop Puppets {PuppetDataType}
 	@within Shatterbox
 ]=]
-Shatterbox.Puppets = Puppets
+Shatterbox.Puppets = State.Puppets
 
 --[=[
 	A function that will wait for a Puppet with a given id to exist in [Shatterbox.Puppets], and return it if it was found.
@@ -236,21 +173,21 @@ Shatterbox.GetPuppetAsync = PuppeteerLogic.GetPuppetAsync
 	@param params DestructionParameters | Hitbox
 ]=]
 function Shatterbox.Destroy(params : Types.DestructionParams)
-	if ModelQueueBehavior(Shatterbox.Destroy, params) then return end
+	if ShatterQueueLogic.ModelQueueBehavior(Shatterbox.Destroy, params) then return end
 
-	local Parameters = ValidateDestructionParams(params)
+	local Parameters = Serializer.ValidateDestructionParams(params)
 
-	if USE_CLIENT_SERVER then
-		local _, createdDirtyGroups = GetDestructibleParts(Parameters)
+	if Settings.USE_CLIENT_SERVER then
+		local _, createdDirtyGroups = ShatterQueueLogic.GetDestructibleParts(Parameters)
 
 		if isServer then
-			ReplicateDestructionToClients("DEFAULT", Parameters, createdDirtyGroups)
+			ClientServerLogic.ReplicateDestructionToClients("DEFAULT", Parameters, createdDirtyGroups)
 		else
-			SendDirtyGroupsToServer(createdDirtyGroups)
+			ClientServerLogic.SendDirtyGroupsToServer(createdDirtyGroups)
 		end
 	end
 
-	table.insert(ShatterQueue, Parameters)
+	table.insert(State.ShatterQueue, Parameters)
 end
 
 
@@ -274,22 +211,22 @@ end
 ]=]
 function Shatterbox.ImaginaryVoxels(params : Types.ImaginaryDestructionParams) : ({Types.ImaginaryVoxel}, {BasePart})
 
-	local did, voxels, existingDebris = ModelQueueBehavior(Shatterbox.ImaginaryVoxels, params)
+	local did, voxels, existingDebris = ShatterQueueLogic.ModelQueueBehavior(Shatterbox.ImaginaryVoxels, params)
 	if did then return voxels, existingDebris end
 
-	local Parameters = ValidateDestructionParams(params)
+	local Parameters = Serializer.ValidateDestructionParams(params)
 
-	local destructibleParts, createdDirtyGroups, _, affectedIDs = GetDestructibleParts(Parameters)
+	local destructibleParts, createdDirtyGroups, _, affectedIDs = ShatterQueueLogic.GetDestructibleParts(Parameters)
 
-	if USE_CLIENT_SERVER then
+	if Settings.USE_CLIENT_SERVER then
 		if isServer then
-			ReplicateDestructionToClients("IMAGINARY", Parameters, createdDirtyGroups)
+			ClientServerLogic.ReplicateDestructionToClients("IMAGINARY", Parameters, createdDirtyGroups)
 		else
-			SendDirtyGroupsToServer(createdDirtyGroups)
+			ClientServerLogic.SendDirtyGroupsToServer(createdDirtyGroups)
 		end
 	end
 
-	voxels, existingDebris = ImaginaryVoxels(Parameters, destructibleParts, affectedIDs)
+	voxels, existingDebris = ShatterQueueLogic.ImaginaryVoxels(Parameters, destructibleParts, affectedIDs)
 
 	return voxels or {}, existingDebris
 end
@@ -308,7 +245,7 @@ end
 	@param ImaginaryVoxel ImaginaryVoxel
 	@param doNotGiveDebrisTag boolean?
 ]=]
-Shatterbox.InstantiateImaginaryVoxel = InstantiateImaginaryVoxel
+Shatterbox.InstantiateImaginaryVoxel = ShatterQueueLogic.InstantiateImaginaryVoxel
 
 
 --[=[
@@ -329,7 +266,7 @@ function Shatterbox.ResetArea(area : Part | Types.WorldInfo)
 	local AreaNormals = VertexMath.GetNormals.Block(ACF)
 
 	-- Check all of the dirty groups to see if any of them intersect the area
-	for DirtyGroupID, groupData in pairs(DirtyGroupData) do
+	for DirtyGroupID, groupData in pairs(State.DirtyGroupData) do
 
 		-- intersection test between the area and the original part that was destroyed (the original part can be of any shape for future compatibility)
 		local originalPart = groupData.OriginalPart
@@ -338,14 +275,14 @@ function Shatterbox.ResetArea(area : Part | Types.WorldInfo)
 
 		local intersectingVerts, intersectingNormals
 		if iBl or iC then
-			intersectingVerts = BlockVerts(cpcf, cps)
-			intersectingNormals = BlockNormals(cpcf)
+			intersectingVerts = GetVerts.Block(cpcf, cps)
+			intersectingNormals = GetNormals.Block(cpcf)
 		elseif not iBa then
 			intersectingVerts = GetVerts[cpsh](cpcf, cps)
 			intersectingNormals = GetNormals[cpsh](cpcf, cps)
 		end
 
-		local intersected = PartContainsAVert(originalPart, AreaVerts)
+		local intersected = VertexMath.PartContainsAVert(originalPart, AreaVerts)
 		if not intersected then
 			if iBa then
 				intersected = VertexMath.BallIntersectsBlock(cpcf, cps, ACF, AS)
@@ -357,7 +294,7 @@ function Shatterbox.ResetArea(area : Part | Types.WorldInfo)
 		end
 
 		if intersected then
-			UndoDirtyGroup(DirtyGroupID)
+			DirtyGroupLogic.UndoDirtyGroup(DirtyGroupID)
 		end
 	end
 end
@@ -374,60 +311,60 @@ end
 ]=]
 function Shatterbox.Reset(doNotRevertOwnership : boolean?, replicated)
 	-- stop all queued destructions
-	table.clear(ShatterQueue)
+	table.clear(State.ShatterQueue)
 
-	table.clear(SmoothCleanupQueue)
+	table.clear(State.SmoothCleanupQueue)
 
-	table.clear(ImaginaryCreateQueue)
-	table.clear(ImaginaryDestroyQueue)
-	table.clear(GreedyMeshedImaginaryParts)
+	table.clear(State.ImaginaryCreateQueue)
+	table.clear(State.ImaginaryDestroyQueue)
+	table.clear(State.GreedyMeshedImaginaryParts)
 
 	if isServer then
-		for _, puppetData in pairs(Puppets) do
-			if not USE_OBJECT_CACHE then
+		for _, puppetData in pairs(State.Puppets) do
+			if not Settings.USE_OBJECT_CACHE then
 				puppetData[3]:Disconnect()
 			end
 			puppetData[2](true)
-			DestroyPart(puppetData[1])
+			DirtyGroupLogic.DestroyPart(puppetData[1])
 		end
 
 		Blink.SignalReset.FireAll(doNotRevertOwnership)
 	else
-		for _, puppetData in pairs(Puppets) do
-			DestroyPart(puppetData[1])
+		for _, puppetData in pairs(State.Puppets) do
+			DirtyGroupLogic.DestroyPart(puppetData[1])
 		end
 	end
 
-	table.clear(Puppets)
-	table.clear(CreatePuppetQueue)
+	table.clear(State.Puppets)
+	table.clear(State.CreatePuppetQueue)
 	State.PuppetNextIndex = 1
-	table.clear(PuppetsLerpData)
+	table.clear(State.PuppetsLerpData)
 	State.PuppetNextReplicationIndex = 1
 
-	if doNotRevertOwnership and USE_CLIENT_SERVER then
+	if doNotRevertOwnership and Settings.USE_CLIENT_SERVER then
 		-- every operation is undone if the ownership is not meant to be reverted
-		for DirtyGroupID in pairs(DirtyGroupData) do
-			UndoDirtyGroup(DirtyGroupID)
+		for DirtyGroupID in pairs(State.DirtyGroupData) do
+			DirtyGroupLogic.UndoDirtyGroup(DirtyGroupID)
 		end
 	else
-		for DirtyGroupID, groupData in pairs(DirtyGroupData) do
+		for DirtyGroupID, groupData in pairs(State.DirtyGroupData) do
 			local OriginalPart = groupData.OriginalPart
 			if replicated then
 				OriginalPart:Destroy()
 			else
 				-- clear the dirty group information
-				OriginalPart:SetAttribute(DirtyGroupIDAttribute)
+				OriginalPart:SetAttribute(Settings.DIRTY_GROUP_ID_ATTRIBUTE_NAME)
 				-- put the original part back where it was before Shatterbox touched it
 				OriginalPart.Parent = groupData.OriginalParent
 			end
 			-- destroy all members of the dirty group
-			for member in pairs(DirtyGroupMembers[DirtyGroupID]) do
-				DestroyPart(member)
+			for member in pairs(State.DirtyGroupMembers[DirtyGroupID]) do
+				DirtyGroupLogic.DestroyPart(member)
 			end
 		end
 
-		table.clear(DirtyGroupData)
-		table.clear(DirtyGroupMembers)
+		table.clear(State.DirtyGroupData)
+		table.clear(State.DirtyGroupMembers)
 	end
 end
 
@@ -441,7 +378,7 @@ end
 ]=]
 function Shatterbox.CreateHitbox() : ShatterboxHitbox
 
-	local hitbox = setmetatable({}, HitboxMT)
+	local hitbox = setmetatable({}, Metatables.HitboxMT)
 
 	hitbox.UserData = {}
 
@@ -455,7 +392,7 @@ end
 	This part is never destroyed, just has its parent set to `nil`.
 ]=]
 function Shatterbox.GetOriginalPart(DirtyGroupID : string) : BasePart
-	local groupData = DirtyGroupData[DirtyGroupID]
+	local groupData = State.DirtyGroupData[DirtyGroupID]
 	if not groupData then return nil end
 	return groupData.OriginalPart
 end
@@ -512,8 +449,8 @@ end
 function Shatterbox.RegisterOnVoxelDestruct(name : string, callback : Types.OnVoxelDestruct)
 	assert(typeof(name) == "string", "You must register the OnVoxelDestruct callback with a string as the name")
 	local id = name:lower()
-	assert(not rawget(OnVoxelDestructRegistry, id), `Callback with name {id} already exists in the registry`)
-	OnVoxelDestructRegistry[id] = callback
+	assert(not rawget(State.OnVoxelDestructRegistry, id), `Callback with name {id} already exists in the registry`)
+	State.OnVoxelDestructRegistry[id] = callback
 end
 
 
@@ -534,8 +471,8 @@ end
 function Shatterbox.RegisterOnDestructCompleted(name : string, callback : Types.OnDestructCompleted)
 	assert(typeof(name) == "string", "You must register the OnDestructCompleted callback with a string as the name")
 	local id = name:lower()
-	assert(not rawget(OnDestructCompletedRegistry, id), `Callback with name {id} already exists in the registry`)
-	OnDestructCompletedRegistry[id] = callback
+	assert(not rawget(State.OnDestructCompletedRegistry, id), `Callback with name {id} already exists in the registry`)
+	State.OnDestructCompletedRegistry[id] = callback
 end
 
 
@@ -548,7 +485,7 @@ end
 ]=]
 function Shatterbox.Cleanup(... : BasePart)
 	for _, Part in ipairs({...}) do
-		DestroyPart(Part)
+		DirtyGroupLogic.DestroyPart(Part)
 	end
 end
 
@@ -575,7 +512,7 @@ end
 	@param info VoxelInfo
 	@within Shatterbox
 ]=]
-Shatterbox.OnVoxelDestruct = HandleOnVoxelDestruct
+Shatterbox.OnVoxelDestruct = ShatterQueueLogic.HandleOnVoxelDestruct
 
 --[=[
 	A function to manually call a registered OnDestructCompleted callback.
@@ -602,7 +539,7 @@ Shatterbox.OnVoxelDestruct = HandleOnVoxelDestruct
 	@within Shatterbox
 	@return any
 ]=]
-Shatterbox.OnDestructCompleted = HandleOnDestructCompleted
+Shatterbox.OnDestructCompleted = ShatterQueueLogic.HandleOnDestructCompleted
 
 Shatterbox.VertexMath = VertexMath
 
@@ -614,17 +551,17 @@ local function PrintState()
 
 	print(P .. `SHATTERBOX ({isServer and "SERVER" or "CLIENT"})`)
 
-	print(P .. "ShatterQueue length: " .. #ShatterQueue)
+	print(P .. "State.ShatterQueue length: " .. #State.ShatterQueue)
 
-	str = P .. "SmoothCleanupQueue: {"
-	for DirtyGroupID, countdown in pairs(SmoothCleanupQueue) do
+	str = P .. "State.SmoothCleanupQueue: {"
+	for DirtyGroupID, countdown in pairs(State.SmoothCleanupQueue) do
 		str = str..P.. "  [" .. DirtyGroupID .. "] = " .. countdown
 	end
 	str = str..P.. "}"
 	print(str)
 
-	str = P .. "DirtyGroupMembers length: {"
-	for DirtyGroupID, members in pairs(DirtyGroupMembers) do
+	str = P .. "State.DirtyGroupMembers length: {"
+	for DirtyGroupID, members in pairs(State.DirtyGroupMembers) do
 		--if not next(members) then continue end
 		local count = 0
 		for _ in pairs(members) do
@@ -655,54 +592,54 @@ end
 
 -- Core Shatterbox event connections
 
-RunService.Heartbeat:Connect(HeartbeatWorker)
+RunService.Heartbeat:Connect(ShatterboxHeartbeatCycle)
 
 if isServer then
 
-	if USE_CLIENT_SERVER then
-		Blink.ClientInitComplete.On(QueueNewPlayerStateReplication)
+	if Settings.USE_CLIENT_SERVER then
+		Blink.ClientInitComplete.On(ClientServerLogic.QueueNewPlayerStateReplication)
 
-		Blink.CreateDirtyGroupsFromClient.On(CreateDirtyGroupsFromClient)
+		Blink.CreateDirtyGroupsFromClient.On(ClientServerLogic.CreateDirtyGroupsFromClient)
 	end
 
 elseif isClient then
 
-	if USE_CLIENT_SERVER then
-		Blink.ReplicateState.On(ReplicateStateFromServer)
+	if Settings.USE_CLIENT_SERVER then
+		Blink.ReplicateState.On(ClientServerLogic.ReplicateStateFromServer)
 
 		Blink.ReplicateDestruction.On(function(destructionType, serialParams, serialNewDirtyGroups)
 			if not State.ClientInitComplete then return end
-			ReplicateDestructionFromServer(destructionType, serialParams, serialNewDirtyGroups)
+			ClientServerLogic.ReplicateDestructionFromServer(destructionType, serialParams, serialNewDirtyGroups)
 		end)
 
 		Blink.CreateDirtyGroupsFromServer.On(function(SerialDirtyGroups)
 			if not State.ClientInitComplete then return end
-			CreateSerialDirtyGroups(SerialDirtyGroups)
+			ClientServerLogic.CreateSerialDirtyGroups(SerialDirtyGroups)
 		end)
 
 		Blink.ClientInitComplete.Fire()
 	end
 
 	Blink.SignalReset.On(function(doNotRevertOwnership)
-		if USE_CLIENT_SERVER and not State.ClientInitComplete then return end
+		if Settings.USE_CLIENT_SERVER and not State.ClientInitComplete then return end
 		Shatterbox.Reset(doNotRevertOwnership, true)
 	end)
 	Blink.SignalResetArea.On(function(cframe, size)
-		if USE_CLIENT_SERVER and not State.ClientInitComplete then return end
+		if Settings.USE_CLIENT_SERVER and not State.ClientInitComplete then return end
 		Shatterbox.ResetArea({ CFrame = cframe, Size = size })
 	end)
 
 	Blink.CreatePuppets.On(function(serialPuppets, startIndex)
-		if USE_CLIENT_SERVER and not State.ClientInitComplete then return end
-		CreatePuppetsFromServer(serialPuppets, startIndex)
+		if Settings.USE_CLIENT_SERVER and not State.ClientInitComplete then return end
+		PuppeteerLogic.CreatePuppetsFromServer(serialPuppets, startIndex)
 	end)
 	Blink.ReplicatePuppetStates.On(function(puppetStates, stepDelta)
-		if USE_CLIENT_SERVER and not State.ClientInitComplete then return end
-		ReplicatePuppetStatesFromServer(puppetStates, stepDelta)
+		if Settings.USE_CLIENT_SERVER and not State.ClientInitComplete then return end
+		PuppeteerLogic.ReplicatePuppetStatesFromServer(puppetStates, stepDelta)
 	end)
 	Blink.DestroyPuppet.On(function(index)
-		if USE_CLIENT_SERVER and not State.ClientInitComplete then return end
-		DestroyPuppet(index)
+		if Settings.USE_CLIENT_SERVER and not State.ClientInitComplete then return end
+		PuppeteerLogic.DestroyPuppet(index)
 	end)
 
 	Blink.SignalPrintState.On(PrintState)

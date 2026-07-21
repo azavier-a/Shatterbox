@@ -12,8 +12,6 @@ local src = core.Parent
 local Types = require(src:WaitForChild("Types"))
 
 local Serializer = require(lib:WaitForChild("Serializer"))
-local SerializedDecalInstance = Serializer.SerializedDecalInstance
-local DeserializedDecalInstance = Serializer.DeserializedDecalInstance
 
 
 local WHITE = Color3.new(1, 1, 1)
@@ -177,7 +175,7 @@ function PartOperations.DeserializedPartInstance(p, CachedParts) : Part
 	-- deserialize decals
 	if p.Decals then
 		for _, serialDecal in ipairs(p.Decals) do
-			local instancedDecal = DeserializedDecalInstance(serialDecal, "Decal")
+			local instancedDecal = Serializer.DeserializedDecalInstance(serialDecal, "Decal")
 			instancedDecal.Parent = part
 		end
 	end
@@ -185,7 +183,7 @@ function PartOperations.DeserializedPartInstance(p, CachedParts) : Part
 	-- deserialize textures
 	if p.Textures then
 		for _, serialTexture in ipairs(p.Textures) do
-			local instancedTexture = DeserializedDecalInstance(serialTexture, "Texture")
+			local instancedTexture = Serializer.DeserializedDecalInstance(serialTexture, "Texture")
 			prop = serialTexture.OffsetStudsU
 			if prop then instancedTexture.OffsetStudsU = prop end
 			prop = serialTexture.OffsetStudsV
@@ -264,7 +262,7 @@ function PartOperations.SerializedPartInstance(p : Part, ignoreWorldState : bool
 	for _, child in ipairs(p:GetChildren()) do
 		local prop = nil
 		if child:IsA("Texture") then
-			local serialTexture = SerializedDecalInstance(child)
+			local serialTexture = Serializer.SerializedDecalInstance(child)
 			prop = child.OffsetStudsU
 			if prop ~= 0 then serialTexture.OffsetStudsU = prop end
 			prop = child.OffsetStudsV
@@ -276,7 +274,7 @@ function PartOperations.SerializedPartInstance(p : Part, ignoreWorldState : bool
 
 			table.insert(textures, serialTexture)
 		elseif child:IsA("Decal") then
-			table.insert(decals, SerializedDecalInstance(child))
+			table.insert(decals, Serializer.SerializedDecalInstance(child))
 		elseif child:IsA("Light") then
 			local className = child.ClassName
 			local isAPointLight = className == "PointLight"

@@ -12,55 +12,17 @@ local core = components.Parent
 local src = core.Parent
 local lib = core:WaitForChild("lib")
 
+local Settings = require(src:WaitForChild("Settings"))
 local Types = require(src:WaitForChild("Types"))
 
-local Settings = require(src:WaitForChild("Settings"))
-local DebrisTag = Settings.DEBRIS_TAG
-local DirtyGroupIDAttribute = Settings.DIRTY_GROUP_ID_ATTRIBUTE_NAME
-local IndestructibleTag = Settings.INDESTRUCTIBLE_TAG
+local SubdivideFunctions = require(lib:WaitForChild("SubdivideFunctions"))
+local VertexMath = require(lib:WaitForChild("VertexMath"))
+local GetVerts, GetNormals = VertexMath.GetVerts, VertexMath.GetNormals
 
 local DeferredInstantiationLogic = require(components:WaitForChild("DeferredInstantiationLogic"))
-local GetImaginaryDestructibleParts = DeferredInstantiationLogic.GetImaginaryDestructibleParts
-
 local DirtyGroupLogic = require(components:WaitForChild("DirtyGroupLogic"))
-local InstantiatePart = DirtyGroupLogic.InstantiatePart
-local DestroyPart = DirtyGroupLogic.DestroyPart
-local PopulateDirtyGroup = DirtyGroupLogic.PopulateDirtyGroup
-local RoundAxisNearestPowerOf2 = DirtyGroupLogic.RoundAxisNearestPowerOf2
-
-local VertexMath = require(lib:WaitForChild("VertexMath"))
-local PartContainsAllVerts = VertexMath.PartContainsAllVerts
-local PartEncapsulatesBlockPart = VertexMath.PartEncapsulatesBlockPart
-local GetVerts = VertexMath.GetVerts
-local BlockVerts = GetVerts.Block
-local GetNormals = VertexMath.GetNormals
-local BlockNormals = GetNormals.Block
-
-local SubdivideFunctions = require(lib:WaitForChild("SubdivideFunctions"))
-local SubdivideOctree = SubdivideFunctions.Octree
-local SubdivideKD = SubdivideFunctions.KD
-local ImaginaryVoxelize = SubdivideFunctions.ImaginaryVoxelize
 
 local State = require(components.Parent:WaitForChild("State"))
-local mapContainer = State.MapContainer
-
-local DirtyGroupData = State.DirtyGroupData
-local DirtyGroupMembers = State.DirtyGroupMembers
-
-local ShatterQueue = State.ShatterQueue
-
-local OnVoxelDestructRegistry = State.OnVoxelDestructRegistry
-local OnDestructCompletedRegistry = State.OnDestructCompletedRegistry
-
-local SmoothCleanupQueue = State.SmoothCleanupQueue
-
-local ImaginaryCreateQueue = State.ImaginaryCreateQueue
-local ImaginaryDestroyQueue = State.ImaginaryDestroyQueue
-
-local OverlapParamsOfTagged = State.OverlapParamsOfTagged
-
-local IntersectingPart = State.PreAllocated.IntersectingPart
-local raycastParams = State.PreAllocated.RaycastParams
 
 
 local EPSILON_VECTOR = Vector3.one * 1e-3
@@ -82,7 +44,7 @@ local function ShouldSkipInstance(i : Instance)
 	-- skip anything that isnt a block part
 	if isClient and (not i:IsA("Part") or i.Shape ~= Enum.PartType.Block) then return true end
 	-- skip anything with the "Indestructible" tag
-	if i:HasTag(IndestructibleTag) then return true end
+	if i:HasTag(Settings.INDESTRUCTIBLE_TAG) then return true end
 	-- skip anything which has a Humanoid child, or if any of its ancestors have a Humanoid child.
 	if FindHumanoidAsAncestorChild(i) then return true end
 
@@ -128,9 +90,9 @@ local function MarkDirty(Part : Part, destructionParams : Types.InternalImaginar
 
 	local CreatedDirtyGroups = {}
 
-	if Part:HasTag(DebrisTag) then return CreatedDirtyGroups end
+	if Part:HasTag(Settings.DEBRIS_TAG) then return CreatedDirtyGroups end
 
-	local PartDirtyGroupID = Part:GetAttribute(DirtyGroupIDAttribute)
+	local PartDirtyGroupID = Part:GetAttribute(Settings.DIRTY_GROUP_ID_ATTRIBUTE_NAME)
 
 	local PartIsDivisible = Part:IsA("Part") and Part.Shape == Enum.PartType.Block
 	local NonDivisibleInteraction = Settings.NonDivisibleInteraction
@@ -150,14 +112,14 @@ local function MarkDirty(Part : Part, destructionParams : Types.InternalImaginar
 		for _, part in ipairs(fallingGroupContainer:GetDescendants()) do
 			if not part:IsA("BasePart") then continue end
 
-			local DirtyGroupID = PopulateDirtyGroup(part, nil)
+			local DirtyGroupID = DirtyGroupLogic.PopulateDirtyGroup(part, nil)
 			part:SetAttribute(FallingGroupIDAttribute, CreatedFallingGroupID)
 
 			if part:IsA("Part") and part.Shape == Enum.PartType.Block then CreatedDirtyGroups[DirtyGroupID] = true end
 
 			part.Parent = nil
 
-			InstantiatePart(DirtyGroupID, part.CFrame, part.Size)
+			DirtyGroupLogic.InstantiatePart(DirtyGroupID, part.CFrame, part.Size)
 
 			fallingGroupMembers[DirtyGroupID] = true
 		end
@@ -166,8 +128,8 @@ local function MarkDirty(Part : Part, destructionParams : Types.InternalImaginar
 	if FallingGroupID then
 		if Settings.UseSmoothCleanup and CleanupDelay > 0 then
 			for DirtyGroupID in pairs(FallingGroupMembers[FallingGroupID]) do
-				local prev = SmoothCleanupQueue[DirtyGroupID]
-				SmoothCleanupQueue[DirtyGroupID] = prev and math.max(prev, CleanupDelay) or CleanupDelay
+				local prev = State.SmoothCleanupQueue[DirtyGroupID]
+				State.SmoothCleanupQueue[DirtyGroupID] = prev and math.max(prev, CleanupDelay) or CleanupDelay
 			end
 		end
 
@@ -177,7 +139,7 @@ local function MarkDirty(Part : Part, destructionParams : Types.InternalImaginar
 
 
 	if not PartDirtyGroupID and (PartIsDivisible or NonDivisibleInteraction ~= "NONE") then
-		PartDirtyGroupID = PopulateDirtyGroup(Part)
+		PartDirtyGroupID = DirtyGroupLogic.PopulateDirtyGroup(Part)
 
 		if PartIsDivisible then
             CreatedDirtyGroups[PartDirtyGroupID] = true
@@ -185,18 +147,18 @@ local function MarkDirty(Part : Part, destructionParams : Types.InternalImaginar
 	end
 
 	if PartDirtyGroupID then
-		if not PartIsDivisible and NonDivisibleInteraction ~= "NONE" and not next(DirtyGroupMembers[PartDirtyGroupID]) then
+		if not PartIsDivisible and NonDivisibleInteraction ~= "NONE" and not next(State.DirtyGroupMembers[PartDirtyGroupID]) then
 			Part.Parent = nil
 			if NonDivisibleInteraction == "FALL" then
-				local cloned = InstantiatePart(PartDirtyGroupID, Part.CFrame, Part.Size)
+				local cloned = DirtyGroupLogic.InstantiatePart(PartDirtyGroupID, Part.CFrame, Part.Size)
 				cloned.Anchored = false
 			end
 		end
 	end
 
 	if Settings.UseSmoothCleanup and CleanupDelay > 0 then
-		local prev = SmoothCleanupQueue[PartDirtyGroupID]
-		SmoothCleanupQueue[PartDirtyGroupID] = prev and math.max(prev, CleanupDelay) or CleanupDelay
+		local prev = State.SmoothCleanupQueue[PartDirtyGroupID]
+		State.SmoothCleanupQueue[PartDirtyGroupID] = prev and math.max(prev, CleanupDelay) or CleanupDelay
 	end
 
 	return CreatedDirtyGroups
@@ -214,6 +176,7 @@ local function GetDestructibleParts(destructionParams : Types.InternalImaginaryP
 
 	local partsInPart, createdDirtyGroups, createdFallingGroups = {}, {}, {}
 
+	local IntersectingPart = State.PreAllocated.IntersectingPart
 	IntersectingPart.CFrame = cuttingPart.CFrame
 	IntersectingPart.Size = cuttingPart.Size
 	IntersectingPart.Shape = cuttingPart.Shape
@@ -221,22 +184,22 @@ local function GetDestructibleParts(destructionParams : Types.InternalImaginaryP
 	local AffectedDirtyGroups = {}
 
 	--debug.profilebegin("GetPartsInPart nil Parent")
-	local FoundPartsInPart = workspace:GetPartsInPart(IntersectingPart, destructionParams.FilterTagged and OverlapParamsOfTagged(destructionParams.FilterTagged))
+	local FoundPartsInPart = workspace:GetPartsInPart(IntersectingPart, destructionParams.FilterTagged and State.OverlapParamsOfTagged(destructionParams.FilterTagged))
 	--debug.profileend()
 
 	for _, part in ipairs( FoundPartsInPart ) do
-		if ImaginaryDestroyQueue[part] then continue end
+		if State.ImaginaryDestroyQueue[part] then continue end
 
-		if (replicated and not part:IsDescendantOf(mapContainer)) or ShouldSkipInstance(part) then continue end
+		if (replicated and not part:IsDescendantOf(State.MapContainer)) or ShouldSkipInstance(part) then continue end
 
-		if part:HasTag(DebrisTag) then
+		if part:HasTag(Settings.DEBRIS_TAG) then
 			table.insert(partsInPart, part)
 			continue
 		end
 
 		if skipFloorsOrWalls then
-			raycastParams.FilterDescendantsInstances = { part }
-			local res = workspace:Raycast(cuttingPart.CFrame.Position, part.Position - cuttingPart.CFrame.Position, raycastParams)
+			State.PreAllocated.RaycastParams.FilterDescendantsInstances = { part }
+			local res = workspace:Raycast(cuttingPart.CFrame.Position, part.Position - cuttingPart.CFrame.Position, State.PreAllocated.RaycastParams)
 			if res then
 				local isFloor = res.Normal:FuzzyEq(Vector3.yAxis, 0.001)
 				if (skipFloors and isFloor) or (skipWalls and not isFloor) then continue end
@@ -251,7 +214,7 @@ local function GetDestructibleParts(destructionParams : Types.InternalImaginaryP
 		if part:IsA("Part") and part.Shape == Enum.PartType.Block then
 			table.insert(partsInPart, part)
 
-			local DirtyGroupID = part:GetAttribute(DirtyGroupIDAttribute)
+			local DirtyGroupID = part:GetAttribute(Settings.DIRTY_GROUP_ID_ATTRIBUTE_NAME)
 
 			AffectedDirtyGroups[DirtyGroupID] = true
 		end
@@ -278,18 +241,18 @@ local function ImaginaryVoxels(params, destructibleParts, dirtyGroups)
 	--debug.profilebegin("FindDestructibleParts")
 	local partsInPart = {}
 	for _, part in ipairs(toDestroy) do
-		if part:HasTag(DebrisTag) then
+		if part:HasTag(Settings.DEBRIS_TAG) then
 			table.insert(existingDebris, part)
 			continue
 		end
 
-		ImaginaryDestroyQueue[part] = true
+		State.ImaginaryDestroyQueue[part] = true
 
 		table.insert(partsInPart, {
 			CFrame = part.CFrame,
 			Size = part.Size,
 
-			DirtyGroupID = part:GetAttribute(DirtyGroupIDAttribute),
+			DirtyGroupID = part:GetAttribute(Settings.DIRTY_GROUP_ID_ATTRIBUTE_NAME),
 		})
 	end
 
@@ -299,15 +262,15 @@ local function ImaginaryVoxels(params, destructibleParts, dirtyGroups)
 
 	local intersectingVerts, intersectingNormals
 	if iBl or iC then
-		intersectingVerts = BlockVerts(cpcf, cps)
-		intersectingNormals = BlockNormals(cpcf)
+		intersectingVerts = GetVerts.Block(cpcf, cps)
+		intersectingNormals = GetNormals.Block(cpcf)
 	elseif not iBa then
 		intersectingVerts = GetVerts[cpsh](cpcf, cps)
 		intersectingNormals = GetNormals[cpsh](cpcf, cps)
 	end
 
-	if #ImaginaryCreateQueue > 0 then
-		local ImaginaryDestructibleParts = GetImaginaryDestructibleParts(params.CuttingPart, params.FilterTagged, intersectingVerts, intersectingNormals, AffectedDirtyGroups)
+	if #State.ImaginaryCreateQueue > 0 then
+		local ImaginaryDestructibleParts = DeferredInstantiationLogic.GetImaginaryDestructibleParts(params.CuttingPart, params.FilterTagged, intersectingVerts, intersectingNormals, AffectedDirtyGroups)
 		if #ImaginaryDestructibleParts > 0 then
             table.move(ImaginaryDestructibleParts, 1, #ImaginaryDestructibleParts, #partsInPart + 1, partsInPart)
         end
@@ -323,9 +286,9 @@ local function ImaginaryVoxels(params, destructibleParts, dirtyGroups)
 	if desiredGridSize then
 		toUseVoxelSize = {}
 		for DirtyGroupID in pairs(AffectedDirtyGroups) do
-			local dirtyGroupData = DirtyGroupData[DirtyGroupID]
+			local dirtyGroupData = State.DirtyGroupData[DirtyGroupID]
 			local OriginalPartSize = dirtyGroupData.OriginalPart.Size
-			local roundedGridLength = RoundAxisNearestPowerOf2(Vector3.one:Max(OriginalPartSize // desiredGridSize))
+			local roundedGridLength = DirtyGroupLogic.RoundAxisNearestPowerOf2(Vector3.one:Max(OriginalPartSize // desiredGridSize))
 
 			dirtyGroupData.MaxGridLength = roundedGridLength:Max(dirtyGroupData.MaxGridLength)
 
@@ -342,16 +305,16 @@ local function ImaginaryVoxels(params, destructibleParts, dirtyGroups)
 		local toDivide = dividing[#dividing]
 		dividing[#dividing] = nil
 
-		local verts = toDivide.Verts or BlockVerts(toDivide.CFrame, toDivide.Size)
+		local verts = toDivide.Verts or GetVerts.Block(toDivide.CFrame, toDivide.Size)
 
 		local s : Vector3, DirtyGroupID : string = toDivide.Size, toDivide.DirtyGroupID
-		local dirtyGroupData = DirtyGroupData[DirtyGroupID]
+		local dirtyGroupData = State.DirtyGroupData[DirtyGroupID]
 		local VoxelSize = toUseVoxelSize and toUseVoxelSize[DirtyGroupID] or dirtyGroupData.VoxelSize
 
 		local partGridLength = (s/VoxelSize + EPSILON_VECTOR):Floor():Max(Vector3.one)
 		local toDivideVoxelContributions = partGridLength.X*partGridLength.Y*partGridLength.Z
 
-		local encapsulated, intersected = PartContainsAllVerts(cuttingPart, verts)
+		local encapsulated, intersected = VertexMath.PartContainsAllVerts(cuttingPart, verts)
 		-- if toDivide is encapsulated within CuttingPart, there is no need to run expensive division algorithm (just voxelize directly or destroy it)
 		if encapsulated then
 			voxelCount += toDivideVoxelContributions
@@ -362,7 +325,7 @@ local function ImaginaryVoxels(params, destructibleParts, dirtyGroups)
 				continue
 			end
 
-			local newVoxels = ImaginaryVoxelize(toDivide, VoxelSize, partGridLength)
+			local newVoxels = SubdivideFunctions.ImaginaryVoxelize(toDivide, VoxelSize, partGridLength)
 			for _, created in ipairs(newVoxels) do
                 created.DirtyGroupID = DirtyGroupID
             end
@@ -375,9 +338,9 @@ local function ImaginaryVoxels(params, destructibleParts, dirtyGroups)
 			if iBa then
 				intersected = VertexMath.BallIntersectsBlock(cpcf, cps, toDivide.CFrame, toDivide.Size)
 			elseif iC then
-				intersected = VertexMath.CylinderIntersectsBlock(cpcf, cps, intersectingVerts, intersectingNormals, toDivide.CFrame, toDivide.Size, verts, BlockNormals(toDivide.CFrame))
+				intersected = VertexMath.CylinderIntersectsBlock(cpcf, cps, intersectingVerts, intersectingNormals, toDivide.CFrame, toDivide.Size, verts, GetNormals.Block(toDivide.CFrame))
 			else
-				intersected = VertexMath.SAT(intersectingVerts, intersectingNormals, verts, BlockNormals(toDivide.CFrame))
+				intersected = VertexMath.SAT(intersectingVerts, intersectingNormals, verts, GetNormals.Block(toDivide.CFrame))
 			end
 		end
 
@@ -403,7 +366,7 @@ local function ImaginaryVoxels(params, destructibleParts, dirtyGroups)
 
 			local OriginalPart = dirtyGroupData.OriginalPart
 
-            local SubdivideFunc = (maxSize < 2*secondMax) and SubdivideOctree or SubdivideKD
+            local SubdivideFunc = (maxSize < 2*secondMax) and SubdivideFunctions.Octree or SubdivideFunctions.KD
 
 			local createdParts = SubdivideFunc(toDivide, partGridLength, VoxelSize, OriginalPart.CFrame:PointToWorldSpace(-OriginalPart.Size*0.5), DirtyGroupID)
 			table.move(createdParts, 1, #createdParts, #dividing + 1, dividing)
@@ -415,7 +378,7 @@ local function ImaginaryVoxels(params, destructibleParts, dirtyGroups)
 
 
 	if #creating > 0 then
-        table.move(creating, 1, #creating, #ImaginaryCreateQueue + 1, ImaginaryCreateQueue)
+        table.move(creating, 1, #creating, #State.ImaginaryCreateQueue + 1, State.ImaginaryCreateQueue)
     end
 
 	return
@@ -436,19 +399,19 @@ local function InstantiateImaginaryVoxel(ImaginaryVoxel : Types.ImaginaryVoxel |
 
 	local DirtyGroupID = ImaginaryVoxel.DirtyGroupID
 
-	local voxel = InstantiatePart(DirtyGroupID, ImaginaryVoxel.CFrame, ImaginaryVoxel.Size, true)
+	local voxel = DirtyGroupLogic.InstantiatePart(DirtyGroupID, ImaginaryVoxel.CFrame, ImaginaryVoxel.Size, true)
 
 	if not doNotGiveDebrisTag then
-        voxel:AddTag(DebrisTag)
+        voxel:AddTag(Settings.DEBRIS_TAG)
     end
 
 	voxel.Destroying:Once(function()
-		local members = DirtyGroupMembers[DirtyGroupID]
+		local members = State.DirtyGroupMembers[DirtyGroupID]
 		if not members then return end
 		members[voxel] = nil
 	end)
 
-	voxel.Parent = DirtyGroupData[DirtyGroupID].OriginalParent
+	voxel.Parent = State.DirtyGroupData[DirtyGroupID].OriginalParent
 
 	return voxel
 end
@@ -462,14 +425,14 @@ local function HandleOnVoxelDestruct(callbackName : string?, voxel : Part, info 
         info = {}
     end
 
-	local s, e = pcall(OnVoxelDestructRegistry[callbackName], voxel, info)
+	local s, e = pcall(State.OnVoxelDestructRegistry[callbackName], voxel, info)
 
 	if not s then
         warn("Voxel destruction failed: " .. e)
     end
 
 	if not (info.IsAlreadyDebris or typeof(voxel) == "table") then
-        voxel:AddTag(DebrisTag)
+        voxel:AddTag(Settings.DEBRIS_TAG)
     end
 end
 ShatterQueueLogic.HandleOnVoxelDestruct = HandleOnVoxelDestruct
@@ -477,7 +440,7 @@ ShatterQueueLogic.HandleOnVoxelDestruct = HandleOnVoxelDestruct
 
 
 local function HandleOnDestructCompleted(name : string, voxelCount : number, affectedIDs : {[string] : boolean}, destructionParameters : Types.DestructionParams)
-	local callback = OnDestructCompletedRegistry[name]
+	local callback = State.OnDestructCompletedRegistry[name]
 	if callback then
 		local s, res = pcall(callback, voxelCount, affectedIDs, destructionParameters)
 		if not s then
@@ -491,12 +454,10 @@ ShatterQueueLogic.HandleOnDestructCompleted = HandleOnDestructCompleted
 
 
 
--- processes one of the operations in the ShatterQueue, removing it if the operation is finished. It queues all divisions for this step of the operation.
--- returns true if an operation step was procesed.
-local function ShatterQueueHeartbeatBehavior()
-	if #ShatterQueue == 0 then return end
+function ShatterQueueLogic.Heartbeat()
+	if #State.ShatterQueue == 0 then return end
 	repeat
-		local popped = table.remove(ShatterQueue) :: Types.DestructionParams
+		local popped = table.remove(State.ShatterQueue) :: Types.DestructionParams
 		local OnVoxelDestruct, OnDestructCompleted = popped.OnVoxelDestruct, popped.OnDestructCompleted
 		local ManualVoxelInstantiation = popped.ManualVoxelInstantiation
 		local CuttingPart, UserData = popped.CuttingPart, popped.UserData
@@ -504,7 +465,7 @@ local function ShatterQueueHeartbeatBehavior()
 		local ivoxels, existingDebris, affectedIDs = ImaginaryVoxels(popped)
 
 		if ivoxels then
-			if OnVoxelDestructRegistry[OnVoxelDestruct] then
+			if State.OnVoxelDestructRegistry[OnVoxelDestruct] then
 				for _, ivoxel in ipairs(ivoxels) do
 					local voxel = ManualVoxelInstantiation and ivoxel or InstantiateImaginaryVoxel(ivoxel, true)
 					HandleOnVoxelDestruct(OnVoxelDestruct, voxel, {
@@ -519,19 +480,19 @@ local function ShatterQueueHeartbeatBehavior()
 		end
 
 		if #existingDebris > 0 then
-			if OnVoxelDestructRegistry[OnVoxelDestruct] then
+			if State.OnVoxelDestructRegistry[OnVoxelDestruct] then
 				for _, debris in ipairs(existingDebris) do
 					HandleOnVoxelDestruct(OnVoxelDestruct, debris, {
-						DirtyGroupID = debris:GetAttribute(DirtyGroupIDAttribute),
+						DirtyGroupID = debris:GetAttribute(Settings.DIRTY_GROUP_ID_ATTRIBUTE_NAME),
 						CuttingPart = CuttingPart,
-						IsEdge = not PartEncapsulatesBlockPart(CuttingPart, debris.CFrame, debris.Size),
+						IsEdge = not VertexMath.PartEncapsulatesBlockPart(CuttingPart, debris.CFrame, debris.Size),
 						IsAlreadyDebris = true,
 						UserData = UserData
 					})
 				end
 			else
 				for _, debris in ipairs(existingDebris) do
-                    DestroyPart(debris)
+                    DirtyGroupLogic.DestroyPart(debris)
                 end
 			end
 		end
@@ -547,9 +508,8 @@ local function ShatterQueueHeartbeatBehavior()
 			end
 		end
 
-	until #ShatterQueue == 0
+	until #State.ShatterQueue == 0
 end
-ShatterQueueLogic.ShatterQueueHeartbeatBehavior = ShatterQueueHeartbeatBehavior
 
 
 

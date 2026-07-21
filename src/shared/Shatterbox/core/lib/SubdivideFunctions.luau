@@ -10,18 +10,6 @@ local splitInHalfVectors = { X = Vector3.new(0.5,1,1), Y = Vector3.new(1,0.5,1),
 local axisNameArray = { "X", "Y", "Z" }
 
 
-
-local math_round = math.round
-local math_max = math.max
-local math_abs = math.abs
-
-local table_create = table.create
-local table_insert = table.insert
-
-local Vector3_new = Vector3.new
-
-
-
 local SubdivideFunctions = {}
 
 
@@ -50,7 +38,7 @@ function SubdivideFunctions.ImaginaryVoxelize(Part : Types.WorldInfo, VoxelSize 
 
 	local O, _, lsx, lsy, lsz = ExtentInfo(Part.CFrame, VoxelSize, GridLength)
 
-	local imaginaryParts, index = table_create(lenX*lenY*lenZ), 0
+	local imaginaryParts, index = table.create(lenX*lenY*lenZ), 0
 
 	for X = 0, lenX - 1 do
 		local xPos = O + X*lsx
@@ -82,7 +70,7 @@ end
     Maintains grid structure according to the VoxelSize and GroupMinimumCorner supplied.
 ]]
 function SubdivideFunctions.Octree(Part : Types.WorldInfo, PartGridLength : Vector3, VoxelSize : Vector3, GroupMinimumCornerPosition : Vector3, DirtyGroupID : string)
-	local Axis, i = table_create(3), 1
+	local Axis, i = table.create(3), 1
 	for _, axis in ipairs(axisNameArray) do
 		if PartGridLength[axis] == 1 then continue end
 		Axis[i] = axis
@@ -106,19 +94,19 @@ function SubdivideFunctions.Octree(Part : Types.WorldInfo, PartGridLength : Vect
 			local centerOnAxis = worldAxisVector:Dot(cframe.Position - GroupMinimumCornerPosition)
 
 			local gridStep : number = VoxelSize[axis]
-			local toSplitPoint = gridStep*math_round(centerOnAxis/gridStep) - centerOnAxis
+			local toSplitPoint = gridStep*math.round(centerOnAxis/gridStep) - centerOnAxis
 
-			if math_abs(toSplitPoint) < EPSILON then
+			if math.abs(toSplitPoint) < EPSILON then
 				local newSize = size*splitInHalfVectors[axis]
 				local off = worldAxisVector*newSize[axis]*0.5
-				table_insert(tmpParts, {
+				table.insert(tmpParts, {
 					CFrame = cframe - off,
 					Size = newSize,
 					DirtyGroupID = DirtyGroupID,
 					Verts = false,
 					isEdge = false
 				})
-				table_insert(tmpParts, {
+				table.insert(tmpParts, {
 					CFrame = cframe + off,
 					Size = newSize,
 					DirtyGroupID = DirtyGroupID,
@@ -137,25 +125,25 @@ function SubdivideFunctions.Octree(Part : Types.WorldInfo, PartGridLength : Vect
 			local minSizeVec, maxSizeVec
 			if ax then
 				local ySize, zSize = size.Y, size.Z
-				minSizeVec = Vector3_new(minSize, ySize, zSize)
-				maxSizeVec = Vector3_new(maxSize, ySize, zSize)
+				minSizeVec = Vector3.new(minSize, ySize, zSize)
+				maxSizeVec = Vector3.new(maxSize, ySize, zSize)
 			elseif ay then
 				local xSize, zSize = size.X, size.Z
-				minSizeVec = Vector3_new(xSize, minSize, zSize)
-				maxSizeVec = Vector3_new(xSize, maxSize, zSize)
+				minSizeVec = Vector3.new(xSize, minSize, zSize)
+				maxSizeVec = Vector3.new(xSize, maxSize, zSize)
 			else
 				local xSize, ySize = size.X, size.Y
-				minSizeVec = Vector3_new(xSize, ySize, minSize)
-				maxSizeVec = Vector3_new(xSize, ySize, maxSize)
+				minSizeVec = Vector3.new(xSize, ySize, minSize)
+				maxSizeVec = Vector3.new(xSize, ySize, maxSize)
 			end
-			table_insert(tmpParts, {
+			table.insert(tmpParts, {
 				CFrame = splitPointCF - splitWorldAxisVector*minSize,
 				Size = minSizeVec,
 				DirtyGroupID = DirtyGroupID,
 				Verts = false,
 				isEdge = false
 			})
-			table_insert(tmpParts, {
+			table.insert(tmpParts, {
 				CFrame = splitPointCF + splitWorldAxisVector*maxSize,
 				Size = maxSizeVec,
 				DirtyGroupID = DirtyGroupID,
@@ -185,7 +173,7 @@ end
 ]]
 function SubdivideFunctions.KD(Part : Types.WorldInfo, PartGridLength : Vector3, VoxelSize : Vector3, GroupMinimumCornerPosition : Vector3, DirtyGroupID : string)
 	local lenX, lenY, lenZ = PartGridLength.X, PartGridLength.Y, PartGridLength.Z
-	local maxSize = math_max(lenX, lenY, lenZ)
+	local maxSize = math.max(lenX, lenY, lenZ)
 	local axis = (lenX == maxSize and "X") or (lenY == maxSize and "Y") or "Z"
 	local PartSize = Part.Size
 
@@ -195,11 +183,11 @@ function SubdivideFunctions.KD(Part : Types.WorldInfo, PartGridLength : Vector3,
 	local centerOnAxis = worldAxisVector:Dot(PartCFrame.Position - GroupMinimumCornerPosition)
 
 	local gridStep : number = VoxelSize[axis]
-	local toSplitPoint = gridStep*math_round(centerOnAxis/gridStep) - centerOnAxis
+	local toSplitPoint = gridStep*math.round(centerOnAxis/gridStep) - centerOnAxis
 
-	local createdParts = table_create(2)
+	local createdParts = table.create(2)
 
-	if math_abs(toSplitPoint) < EPSILON then
+	if math.abs(toSplitPoint) < EPSILON then
 		local newSize = PartSize*splitInHalfVectors[axis]
 		local off = worldAxisVector*newSize[axis]*0.5
 		createdParts[1] = {
@@ -229,16 +217,16 @@ function SubdivideFunctions.KD(Part : Types.WorldInfo, PartGridLength : Vector3,
 	local minSizeVec, maxSizeVec
 	if axis == "X" then
 		local ySize, zSize = PartSize.Y, PartSize.Z
-		minSizeVec = Vector3_new(minSize, ySize, zSize)
-		maxSizeVec = Vector3_new(maxSize, ySize, zSize)
+		minSizeVec = Vector3.new(minSize, ySize, zSize)
+		maxSizeVec = Vector3.new(maxSize, ySize, zSize)
 	elseif axis == "Y" then
 		local xSize, zSize = PartSize.X, PartSize.Z
-		minSizeVec = Vector3_new(xSize, minSize, zSize)
-		maxSizeVec = Vector3_new(xSize, maxSize, zSize)
+		minSizeVec = Vector3.new(xSize, minSize, zSize)
+		maxSizeVec = Vector3.new(xSize, maxSize, zSize)
 	else
 		local xSize, ySize = PartSize.X, PartSize.Y
-		minSizeVec = Vector3_new(xSize, ySize, minSize)
-		maxSizeVec = Vector3_new(xSize, ySize, maxSize)
+		minSizeVec = Vector3.new(xSize, ySize, minSize)
+		maxSizeVec = Vector3.new(xSize, ySize, maxSize)
 	end
 	createdParts[1] = {
 		CFrame = splitPointCF - splitWorldAxisVector*minSize,

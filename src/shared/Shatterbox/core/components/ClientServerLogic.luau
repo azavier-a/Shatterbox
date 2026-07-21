@@ -12,47 +12,18 @@ local core = components.Parent
 local src = core.Parent
 local lib = core:WaitForChild("lib")
 
+local Settings = require(src:WaitForChild("Settings"))
 local Types = require(src:WaitForChild("Types"))
 
-local Settings = require(src:WaitForChild("Settings"))
-local DebrisTag = Settings.DEBRIS_TAG
+local PartOperations = require(lib:WaitForChild("PartOperations"))
+local Serializer = require(lib:WaitForChild("Serializer"))
 
 local DirtyGroupLogic = require(components:WaitForChild("DirtyGroupLogic"))
-local PopulateDirtyGroup = DirtyGroupLogic.PopulateDirtyGroup
-
 local ShatterQueueLogic = require(components:WaitForChild("ShatterQueueLogic"))
-local ImaginaryVoxels = ShatterQueueLogic.ImaginaryVoxels
-
 local PuppeteerLogic = require(components:WaitForChild("PuppeteerLogic"))
-local DeserializedPuppet = PuppeteerLogic.DeserializedPuppet
-
-local PartOperations = require(lib:WaitForChild("PartOperations"))
-local SerializedPartInstance = PartOperations.SerializedPartInstance
-local DeserializedPartInstance = PartOperations.DeserializedPartInstance
-local PartFromTemplate = PartOperations.PartFromTemplate
-
-local Serializer = require(lib:WaitForChild("Serializer"))
-local SerializedDestructionParams = Serializer.SerializedDestructionParams
-local DeserializedDestructionParams = Serializer.DeserializedDestructionParams
 
 local State = require(components.Parent:WaitForChild("State"))
-local mapContainer = State.MapContainer
-
-local CachedParts = State.CachedParts
-
 local Blink = State.Blink
-local StepReplication = Blink.StepReplication
-
-local DirtyGroupData = State.DirtyGroupData
-local DirtyGroupMembers = State.DirtyGroupMembers
-
-local ShatterQueue = State.ShatterQueue
-
-local SmoothCleanupQueue = State.SmoothCleanupQueue
-
-local Puppets = State.Puppets
-
-local NewPlayerStateReplicationQueue = State.NewPlayerStateReplicationQueue
 
 
 type DestructionTypes = ("IMAGINARY"|"DEFAULT")
@@ -66,19 +37,19 @@ local ClientServerLogic = {}
 local function CreateSerialDirtyGroups(SerialDirtyGroups)
 	for DirtyGroupID, serialDirtyGroupData in pairs(SerialDirtyGroups) do
 		local serialOriginal = serialDirtyGroupData.OriginalPart
-		local newPart = DeserializedPartInstance(serialOriginal)
-		newPart.Parent = mapContainer
+		local newPart = PartOperations.DeserializedPartInstance(serialOriginal)
+		newPart.Parent = State.MapContainer
 
 		local GridLength = serialDirtyGroupData.GridLength
 
-		DirtyGroupData[DirtyGroupID] = {
+		State.DirtyGroupData[DirtyGroupID] = {
 			OriginalPart = newPart,
-			OriginalParent = mapContainer,
+			OriginalParent = State.MapContainer,
 			GridLength = GridLength,
 			MaxGridLength = serialDirtyGroupData.MaxGridLength,
 			VoxelSize = serialOriginal.Size / GridLength,
 		}
-		DirtyGroupMembers[DirtyGroupID] = {}
+		State.DirtyGroupMembers[DirtyGroupID] = {}
 	end
 end
 ClientServerLogic.CreateSerialDirtyGroups = CreateSerialDirtyGroups
@@ -89,8 +60,8 @@ ClientServerLogic.CreateSerialDirtyGroups = CreateSerialDirtyGroups
 local function CreateDirtyGroupsFromClient(plr, DirtyGroups)
 	local SerialDirtyGroups = {}
 	for DirtyGroupID, part in pairs(DirtyGroups) do
-		PopulateDirtyGroup(part, DirtyGroupID)
-		SerialDirtyGroups[DirtyGroupID] = SerializedPartInstance(part)
+		DirtyGroupLogic.PopulateDirtyGroup(part, DirtyGroupID)
+		SerialDirtyGroups[DirtyGroupID] = PartOperations.SerializedPartInstance(part)
 	end
 
 	Blink.CreateDirtyGroupsFromServer.FireExcept(plr, SerialDirtyGroups)
@@ -102,16 +73,16 @@ local function SendDirtyGroupsToServer(DirtyGroups)
 
 	local ToSendToServer = {}
 	for DirtyGroupID in pairs(DirtyGroups) do
-		local groupData = DirtyGroupData[DirtyGroupID]
+		local groupData = State.DirtyGroupData[DirtyGroupID]
 		local PartToSend = groupData.OriginalPart
-		local newClientPart = PartFromTemplate(PartToSend, PartToSend.CFrame)
+		local newClientPart = PartOperations.PartFromTemplate(PartToSend, PartToSend.CFrame)
 		groupData.OriginalPart = newClientPart
 		PartToSend.Parent = nil
-		newClientPart.Parent = mapContainer
+		newClientPart.Parent = State.MapContainer
 		ToSendToServer[DirtyGroupID] = PartToSend
 	end
 	Blink.CreateDirtyGroupsFromClient.Fire(ToSendToServer)
-	StepReplication()
+	Blink.StepReplication()
 end
 ClientServerLogic.SendDirtyGroupsToServer = SendDirtyGroupsToServer
 
@@ -121,9 +92,9 @@ local function ReplicateDestructionToClients(destructionType : DestructionTypes,
 
 	local serialNewDirtyGroups = {}
 	for DirtyGroupID in pairs(createdDirtyGroups) do
-		local dirtyGroupData = DirtyGroupData[DirtyGroupID]
+		local dirtyGroupData = State.DirtyGroupData[DirtyGroupID]
 		serialNewDirtyGroups[DirtyGroupID] = {
-			OriginalPart = SerializedPartInstance(DirtyGroupData[DirtyGroupID].OriginalPart),
+			OriginalPart = PartOperations.SerializedPartInstance(State.DirtyGroupData[DirtyGroupID].OriginalPart),
 			GridLength = dirtyGroupData.GridLength,
 			MaxGridLength = dirtyGroupData.MaxGridLength
 		}
@@ -141,9 +112,9 @@ local function ReplicateDestructionToClients(destructionType : DestructionTypes,
 
 		if #PlayerList == 0 then return end
 
-		Blink.ReplicateDestruction.FireList(PlayerList, destructionType, SerializedDestructionParams(destructionParams), serialNewDirtyGroups)
+		Blink.ReplicateDestruction.FireList(PlayerList, destructionType, Serializer.SerializedDestructionParams(destructionParams), serialNewDirtyGroups)
 	else
-		Blink.ReplicateDestruction.FireAll(destructionType, SerializedDestructionParams(destructionParams), serialNewDirtyGroups)
+		Blink.ReplicateDestruction.FireAll(destructionType, Serializer.SerializedDestructionParams(destructionParams), serialNewDirtyGroups)
 	end
 
 	if not destructionParams.WaitForClientTimeout or destructionType == "IMAGINARY" then return end
@@ -174,21 +145,21 @@ ClientServerLogic.ReplicateDestructionToClients = ReplicateDestructionToClients
 
 local function ReplicateDestructionFromServer(destructionType, serialParams, serialNewDirtyGroups)
 
-	local destructionParams = DeserializedDestructionParams(serialParams)
+	local destructionParams = Serializer.DeserializedDestructionParams(serialParams)
 
 	CreateSerialDirtyGroups(serialNewDirtyGroups)
 
 	if destructionType == "IMAGINARY" then
 		destructionParams.SkipEncapsulatedVoxels = true
 		RunService.Heartbeat:Wait()
-		ImaginaryVoxels(destructionParams)
+		ShatterQueueLogic.ImaginaryVoxels(destructionParams)
 
 	elseif destructionType == "DEFAULT" then
 		if destructionParams.WaitForClientTimeout and destructionParams.WaitForClientTimeout > 0 then
 			Blink.ClientRecievedMapParts.Fire(destructionParams.ID)
 		end
 
-		table.insert(ShatterQueue, destructionParams)
+		table.insert(State.ShatterQueue, destructionParams)
 	end
 end
 ClientServerLogic.ReplicateDestructionFromServer = ReplicateDestructionFromServer
@@ -198,13 +169,13 @@ ClientServerLogic.ReplicateDestructionFromServer = ReplicateDestructionFromServe
 local function ReplicateStateToPlayer(plr)
 
 	local serialDirtyGroupData = {}
-	for DirtyGroupID, groupData in pairs(DirtyGroupData) do
+	for DirtyGroupID, groupData in pairs(State.DirtyGroupData) do
 		local OriginalPart = groupData.OriginalPart
 
 		if OriginalPart:IsA("Part") and OriginalPart.Shape == Enum.PartType.Block then
 			-- only send the original part because OriginalParent doesn't matter in this case and GridSize can be derived
 			serialDirtyGroupData[DirtyGroupID] = {
-				OriginalPart = SerializedPartInstance(OriginalPart),
+				OriginalPart = PartOperations.SerializedPartInstance(OriginalPart),
 				GridLength = groupData.GridLength,
 				MaxGridLength = groupData.MaxGridLength
 			}
@@ -213,18 +184,18 @@ local function ReplicateStateToPlayer(plr)
 
 	local serialDirtyGroupMembers, destroyedDirtyGroups = {}, {}
 	for DirtyGroupID in pairs(serialDirtyGroupData) do
-		local groupMembers = DirtyGroupMembers[DirtyGroupID]
+		local groupMembers = State.DirtyGroupMembers[DirtyGroupID]
 
-		local OriginalPart = DirtyGroupData[DirtyGroupID].OriginalPart
+		local OriginalPart = State.DirtyGroupData[DirtyGroupID].OriginalPart
 
 		local serialMembers = {}
 		serialDirtyGroupMembers[DirtyGroupID] = serialMembers
 
 		if next(groupMembers) then
 			for member in pairs(groupMembers) do
-				if member:HasTag(DebrisTag) then
+				if member:HasTag(Settings.DEBRIS_TAG) then
 					local found = false
-					for _, puppetData in pairs(Puppets) do
+					for _, puppetData in pairs(State.Puppets) do
 						if puppetData[1] == member then
 							found = true
 							break
@@ -232,7 +203,7 @@ local function ReplicateStateToPlayer(plr)
 					end
 					if found then continue end
 				end
-				table.insert(serialMembers, SerializedPartInstance(member))
+				table.insert(serialMembers, PartOperations.SerializedPartInstance(member))
 			end
 		elseif not OriginalPart.Parent then
 			destroyedDirtyGroups[DirtyGroupID] = true
@@ -240,8 +211,8 @@ local function ReplicateStateToPlayer(plr)
 	end
 
 	local serialPuppets = {}
-	for puppetID, puppetData in pairs(Puppets) do
-		serialPuppets[puppetID] = SerializedPartInstance(puppetData[1])
+	for puppetID, puppetData in pairs(State.Puppets) do
+		serialPuppets[puppetID] = PartOperations.SerializedPartInstance(puppetData[1])
 	end
 
 	Blink.ReplicateState.Fire(plr,
@@ -249,7 +220,7 @@ local function ReplicateStateToPlayer(plr)
 		serialDirtyGroupMembers,
 		destroyedDirtyGroups,
 
-		SmoothCleanupQueue,
+		State.SmoothCleanupQueue,
 
 		serialPuppets,
 		State.PuppetNextIndex
@@ -262,9 +233,9 @@ local function ReplicateStateFromServer(serialDirtyGroupData, serialDirtyGroupMe
 	for DirtyGroupID, serializedData in pairs(serialDirtyGroupData) do
 		local serialOriginal = serializedData.OriginalPart
 		local GridLength = serializedData.GridLength
-		DirtyGroupData[DirtyGroupID] = {
-			OriginalPart = DeserializedPartInstance(serialOriginal),
-			OriginalParent = mapContainer,
+		State.DirtyGroupData[DirtyGroupID] = {
+			OriginalPart = PartOperations.DeserializedPartInstance(serialOriginal),
+			OriginalParent = State.MapContainer,
 			GridLength = GridLength,
 			VoxelSize = serialOriginal.Size / GridLength,
 			MaxGridLength = serializedData.MaxGridLength
@@ -273,31 +244,31 @@ local function ReplicateStateFromServer(serialDirtyGroupData, serialDirtyGroupMe
 
 	for DirtyGroupID, serialGroupMembers in pairs(serialDirtyGroupMembers) do
 		local groupMembers = {}
-		DirtyGroupMembers[DirtyGroupID] = groupMembers
+		State.DirtyGroupMembers[DirtyGroupID] = groupMembers
 
 		if destroyedDirtyGroups[DirtyGroupID] then continue end
 
 		if #serialGroupMembers == 0 then
-			DirtyGroupData[DirtyGroupID].OriginalPart.Parent = mapContainer
+			State.DirtyGroupData[DirtyGroupID].OriginalPart.Parent = State.MapContainer
 			continue
 		end
 
 		for _, serialMember in ipairs(serialGroupMembers) do
-			local part = DeserializedPartInstance(serialMember, CachedParts)
+			local part = PartOperations.DeserializedPartInstance(serialMember, State.CachedParts)
 			if not part.Parent then
-				part.Parent = mapContainer
+				part.Parent = State.MapContainer
 			end
 			groupMembers[part] = true
 		end
 	end
 
 	for DirtyGroupID, cleanupTime in pairs(serverSmoothCleanupQueue) do
-		SmoothCleanupQueue[DirtyGroupID] = cleanupTime
+		State.SmoothCleanupQueue[DirtyGroupID] = cleanupTime
 	end
 
 	State.PuppetNextIndex = serverPuppetsNextIndex
 	for puppetID, serialPuppet in pairs(serialPuppets) do
-		Puppets[puppetID] = { DeserializedPuppet(serialPuppet) }
+		State.Puppets[puppetID] = { PuppeteerLogic.DeserializedPuppet(serialPuppet) }
 	end
 
 	State.ClientInitComplete = true
@@ -307,7 +278,7 @@ ClientServerLogic.ReplicateStateFromServer = ReplicateStateFromServer
 
 
 local function QueueNewPlayerStateReplication(plr)
-	table.insert(NewPlayerStateReplicationQueue, plr)
+	table.insert(State.NewPlayerStateReplicationQueue, plr)
 end
 ClientServerLogic.QueueNewPlayerStateReplication = QueueNewPlayerStateReplication
 

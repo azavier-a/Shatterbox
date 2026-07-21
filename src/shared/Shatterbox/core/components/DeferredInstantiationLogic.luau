@@ -11,43 +11,27 @@ local lib = core:WaitForChild("lib")
 
 local Settings = require(src:WaitForChild("Settings"))
 
-local DirtyGroupLogic = require(components:WaitForChild("DirtyGroupLogic"))
-local InstantiatePart = DirtyGroupLogic.InstantiatePart
-local DestroyPart = DirtyGroupLogic.DestroyPart
-
-local GreedyMeshLogic = require(components:WaitForChild("GreedyMeshLogic"))
-local GreedyMeshBehavior = GreedyMeshLogic.GreedyMesh
-
 local VertexMath = require(lib:WaitForChild("VertexMath"))
-local PartContainsAVert = VertexMath.PartContainsAVert
-local GetVerts = VertexMath.GetVerts
-local BlockVerts = GetVerts.Block
-local GetNormals = VertexMath.GetNormals
-local BlockNormals = GetNormals.Block
+local GetVerts, GetNormals = VertexMath.GetVerts, VertexMath.GetNormals
+
+local DirtyGroupLogic = require(components:WaitForChild("DirtyGroupLogic"))
+local GreedyMeshLogic = require(components:WaitForChild("GreedyMeshLogic"))
 
 local State = require(components.Parent:WaitForChild("State"))
-
-local CachedParts = State.CachedParts
-
-local DirtyGroupMembers = State.DirtyGroupMembers
-
-local ImaginaryCreateQueue = State.ImaginaryCreateQueue
-local ImaginaryDestroyQueue = State.ImaginaryDestroyQueue
-local GreedyMeshedImaginaryParts = State.GreedyMeshedImaginaryParts
 
 
 local DeferredInstantiationLogic = {}
 
 
--- Returns all of the imaginary destructible parts that intersect the cuttingPart, removing them from the ImaginaryCreateQueue when that happens.
+-- Returns all of the imaginary destructible parts that intersect the cuttingPart, removing them from the State.ImaginaryCreateQueue when that happens.
 local function GetImaginaryDestructibleParts(cuttingPart, filterTagged, verts, normals, affectedIDs)
 	local iBa, iC = cuttingPart.Shape.Name == "Ball", cuttingPart.Shape.Name == "Cylinder"
 
 	local processed = {}
 	local destructibles = {}
 
-	while #ImaginaryCreateQueue > 0 do
-		local ivox = table.remove(ImaginaryCreateQueue)
+	while #State.ImaginaryCreateQueue > 0 do
+		local ivox = table.remove(State.ImaginaryCreateQueue)
 		--[[
 		if filterTagged then
 			local OriginalPart = Shatterbox.GetOriginalPart(ivox.DirtyGroupID)
@@ -62,16 +46,16 @@ local function GetImaginaryDestructibleParts(cuttingPart, filterTagged, verts, n
 		end
 		--]]
 
-		local voxVerts = BlockVerts(ivox.CFrame, ivox.Size)
+		local voxVerts = GetVerts.Block(ivox.CFrame, ivox.Size)
 
-		local intersected = PartContainsAVert(cuttingPart, voxVerts)
+		local intersected = VertexMath.PartContainsAVert(cuttingPart, voxVerts)
 		if not intersected then
 			if iBa then
 				intersected = VertexMath.BallIntersectsBlock(cuttingPart.CFrame, cuttingPart.Size, ivox.CFrame, ivox.Size)
 			elseif iC then
-				intersected = VertexMath.CylinderIntersectsBlock(cuttingPart.CFrame, cuttingPart.Size, verts, normals, ivox.CFrame, ivox.Size, BlockVerts(ivox.CFrame, ivox.Size), BlockNormals(ivox.CFrame))
+				intersected = VertexMath.CylinderIntersectsBlock(cuttingPart.CFrame, cuttingPart.Size, verts, normals, ivox.CFrame, ivox.Size, GetVerts.Block(ivox.CFrame, ivox.Size), GetNormals.Block(ivox.CFrame))
 			else
-				intersected = VertexMath.SAT(verts, normals, voxVerts, BlockNormals(ivox.CFrame))
+				intersected = VertexMath.SAT(verts, normals, voxVerts, GetNormals.Block(ivox.CFrame))
 			end
 		end
 
@@ -83,19 +67,19 @@ local function GetImaginaryDestructibleParts(cuttingPart, filterTagged, verts, n
 		table.insert(processed, ivox)
 	end
 
-	ImaginaryCreateQueue = table.move(processed, 1, #processed, #ImaginaryCreateQueue + 1, ImaginaryCreateQueue)
+	State.ImaginaryCreateQueue = table.move(processed, 1, #processed, #State.ImaginaryCreateQueue + 1, State.ImaginaryCreateQueue)
 	return destructibles
 end
 DeferredInstantiationLogic.GetImaginaryDestructibleParts = GetImaginaryDestructibleParts
 
 
 
-function DeferredInstantiationLogic.DeferredInstantiationHeartbeatBehavior()
-	if #ImaginaryCreateQueue > 0 then
+function DeferredInstantiationLogic.Heartbeat()
+	if #State.ImaginaryCreateQueue > 0 then
 		if Settings.UseGreedyMeshing then
 			local DirtyGroupImaginaryParts = {}
 
-			for _, toCreate in ipairs(ImaginaryCreateQueue) do
+			for _, toCreate in ipairs(State.ImaginaryCreateQueue) do
 				local DirtyGroupID = toCreate.DirtyGroupID
 				local ImaginaryParts = DirtyGroupImaginaryParts[DirtyGroupID]
 				if not ImaginaryParts then
@@ -108,41 +92,41 @@ function DeferredInstantiationLogic.DeferredInstantiationHeartbeatBehavior()
 
 			for DirtyGroupID, ImaginaryParts in pairs(DirtyGroupImaginaryParts) do
 				local countMembers = #ImaginaryParts
-				for _ in pairs(DirtyGroupMembers[DirtyGroupID]) do
+				for _ in pairs(State.DirtyGroupMembers[DirtyGroupID]) do
 					countMembers += 1
 					if countMembers > 1 then break end
 				end
 				if countMembers <= 1 then
-					table.move(ImaginaryParts, 1, #ImaginaryParts, #GreedyMeshedImaginaryParts + 1, GreedyMeshedImaginaryParts)
+					table.move(ImaginaryParts, 1, #ImaginaryParts, #State.GreedyMeshedImaginaryParts + 1, State.GreedyMeshedImaginaryParts)
 					continue
 				end
-				GreedyMeshBehavior(DirtyGroupID, ImaginaryParts)
+				GreedyMeshLogic.GreedyMesh(DirtyGroupID, ImaginaryParts)
 			end
 
-			for _, toCreate in ipairs(GreedyMeshedImaginaryParts) do
-				InstantiatePart(toCreate.DirtyGroupID, toCreate.CFrame, toCreate.Size)
+			for _, toCreate in ipairs(State.GreedyMeshedImaginaryParts) do
+				DirtyGroupLogic.InstantiatePart(toCreate.DirtyGroupID, toCreate.CFrame, toCreate.Size)
 			end
 
-			table.clear(GreedyMeshedImaginaryParts)
+			table.clear(State.GreedyMeshedImaginaryParts)
 		else
-			for _, toCreate in ipairs(ImaginaryCreateQueue) do
-				InstantiatePart(toCreate.DirtyGroupID, toCreate.CFrame, toCreate.Size)
+			for _, toCreate in ipairs(State.ImaginaryCreateQueue) do
+				DirtyGroupLogic.InstantiatePart(toCreate.DirtyGroupID, toCreate.CFrame, toCreate.Size)
 			end
 		end
 
-		table.clear(ImaginaryCreateQueue)
+		table.clear(State.ImaginaryCreateQueue)
 	end
 
-	if next(ImaginaryDestroyQueue) then
-		for toDestroy in pairs(ImaginaryDestroyQueue) do
-			DestroyPart(toDestroy)
+	if next(State.ImaginaryDestroyQueue) then
+		for toDestroy in pairs(State.ImaginaryDestroyQueue) do
+			DirtyGroupLogic.DestroyPart(toDestroy)
 		end
-		table.clear(ImaginaryDestroyQueue)
+		table.clear(State.ImaginaryDestroyQueue)
 	end
 
 	if State.ScheduledUpdate then
 		State.ScheduledUpdate = false
-		CachedParts:Update()
+		State.CachedParts:Update()
 	end
 end
 

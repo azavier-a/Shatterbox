@@ -30,43 +30,13 @@ local lib = core:WaitForChild("lib")
 --local Types = require(src:WaitForChild("Types"))
 
 local Settings = require(src:WaitForChild("Settings"))
-local PUPPET_TWEEN_MODE = Settings.PUPPET_TWEEN_MODE
-local USE_OBJECT_CACHE = Settings.USE_OBJECT_CACHE
-
-local IndestructibleTag = Settings.INDESTRUCTIBLE_TAG
-
-local DirtyGroupLogic = require(components:WaitForChild("DirtyGroupLogic"))
-local DestroyPart = DirtyGroupLogic.DestroyPart
 
 local PartOperations = require(lib:WaitForChild("PartOperations"))
-local SerializedPartInstance = PartOperations.SerializedPartInstance
-local DeserializedPartInstance = PartOperations.DeserializedPartInstance
+
+local DirtyGroupLogic = require(components:WaitForChild("DirtyGroupLogic"))
 
 local State = require(components.Parent:WaitForChild("State"))
-local IsPuppet = State.IsPuppet
-
 local Blink = State.Blink
-
-local CachedParts = State.CachedParts
-
-local mapContainer = State.MapContainer
-
-local Puppets = State.Puppets
-local CreatePuppetQueue = State.CreatePuppetQueue
-local PuppetsLerpData = State.PuppetsLerpData
-
-
-local WorldAnchor
-if PUPPET_TWEEN_MODE == "TRANSFORM" then
-	WorldAnchor = Instance.new("Part")
-	WorldAnchor.Anchored = true
-	WorldAnchor.CanCollide = false
-	WorldAnchor.CanTouch = false
-	WorldAnchor.CanQuery = false
-	WorldAnchor.Transparency = 1
-	WorldAnchor.CFrame = CFrame.identity
-	WorldAnchor.Parent = workspace
-end
 
 
 local TAU = 2*math.pi
@@ -106,6 +76,19 @@ end
 
 
 local PuppeteerLogic = {}
+
+
+local WorldAnchor
+if Settings.PUPPET_TWEEN_MODE == "TRANSFORM" then
+	WorldAnchor = Instance.new("Part")
+	WorldAnchor.Anchored = true
+	WorldAnchor.CanCollide = false
+	WorldAnchor.CanTouch = false
+	WorldAnchor.CanQuery = false
+	WorldAnchor.Transparency = 1
+	WorldAnchor.CFrame = CFrame.identity
+	WorldAnchor.Parent = workspace
+end
 PuppeteerLogic.WorldAnchor = WorldAnchor
 
 
@@ -115,10 +98,10 @@ function PuppeteerLogic.Puppeteer(voxel : Part) : number
 
 	voxel.Anchored = false
 
-	local isAlreadyPuppet = IsPuppet(voxel)
+	local isAlreadyPuppet = State.IsPuppet(voxel)
 	if isAlreadyPuppet then return isAlreadyPuppet end
 
-	voxel.Parent = mapContainer
+	voxel.Parent = State.MapContainer
 
 	local s, e = pcall(voxel.SetNetworkOwner, voxel, nil)
 	if not s then
@@ -131,18 +114,18 @@ function PuppeteerLogic.Puppeteer(voxel : Part) : number
 	end)
 
 
-	local OldPuppetData = Puppets[State.PuppetNextIndex]
+	local OldPuppetData = State.Puppets[State.PuppetNextIndex]
 
 	if OldPuppetData then
-		if not USE_OBJECT_CACHE then
+		if not Settings.USE_OBJECT_CACHE then
 			OldPuppetData[3]:Disconnect()
 		end
 		OldPuppetData[2](true)
-		DestroyPart(OldPuppetData[1])
+		DirtyGroupLogic.DestroyPart(OldPuppetData[1])
 	end
 
-	table.insert(CreatePuppetQueue, voxel)
-	local QueueInsertedIndex = #CreatePuppetQueue
+	table.insert(State.CreatePuppetQueue, voxel)
+	local QueueInsertedIndex = #State.CreatePuppetQueue
 	local PuppetInsertedIndex = State.PuppetNextIndex
 
 	local PuppetData = {
@@ -153,35 +136,35 @@ function PuppeteerLogic.Puppeteer(voxel : Part) : number
 			-- if this server side voxel is queued for client-side creation, remove it from that queue
 			local found
 			for i = 1, QueueInsertedIndex do
-				if CreatePuppetQueue[i] == voxel then
+				if State.CreatePuppetQueue[i] == voxel then
 					found = i
 					break
 				end
 			end
 
 			if found then
-				table.remove(CreatePuppetQueue, found)
+				table.remove(State.CreatePuppetQueue, found)
 			end
 
 			if doNotSignal then return end
 
 			-- signal to the client that the puppet needs to be destroyed and remove it (probably will batch these in the future)
 
-			Puppets[PuppetInsertedIndex] = nil
-			PuppetsLerpData[PuppetInsertedIndex] = nil
+			State.Puppets[PuppetInsertedIndex] = nil
+			State.PuppetsLerpData[PuppetInsertedIndex] = nil
 			Blink.DestroyPuppet.FireAll(PuppetInsertedIndex)
 		end
 	}
 
-	if not USE_OBJECT_CACHE then
+	if not Settings.USE_OBJECT_CACHE then
 		PuppetData[3] = voxel.Destroying:Once(PuppetData[2])
 	end
 
 	PuppetData[4] = 0 -- The sleep anchoring timeout
 
 
-	Puppets[PuppetInsertedIndex] = PuppetData
-	PuppetsLerpData[PuppetInsertedIndex] = {}
+	State.Puppets[PuppetInsertedIndex] = PuppetData
+	State.PuppetsLerpData[PuppetInsertedIndex] = {}
 	State.PuppetNextIndex += 1
 	if State.PuppetNextIndex > Settings.PuppetMaxCount then
 		State.PuppetNextIndex = 1
@@ -193,9 +176,9 @@ end
 
 
 function PuppeteerLogic.DestroyPuppet(index)
-	DestroyPart(Puppets[index][1])
-	Puppets[index] = nil
-	PuppetsLerpData[index] = nil
+	DirtyGroupLogic.DestroyPart(State.Puppets[index][1])
+	State.Puppets[index] = nil
+	State.PuppetsLerpData[index] = nil
 end
 
 
@@ -203,12 +186,12 @@ end
 function PuppeteerLogic.GetPuppetAsync(puppetID : number|string, waitCount : number?) : Part?
 	puppetID = tonumber(puppetID)
 	waitCount = waitCount or 20
-	local PuppetPart : Part = Puppets[puppetID] and Puppets[puppetID][1]
+	local PuppetPart : Part = State.Puppets[puppetID] and State.Puppets[puppetID][1]
 	if not PuppetPart then
 		local i = 1
 		repeat
 			RunService.Heartbeat:Wait()
-			PuppetPart = Puppets[puppetID] and Puppets[puppetID][1]
+			PuppetPart = State.Puppets[puppetID] and State.Puppets[puppetID][1]
 			i += 1
 		until PuppetPart or i > waitCount
 	end
@@ -219,13 +202,13 @@ end
 
 
 local function DeserializedPuppet(serialPuppet)
-	local Part = DeserializedPartInstance(serialPuppet, CachedParts)
+	local Part = PartOperations.DeserializedPartInstance(serialPuppet, State.CachedParts)
 
 	Part.Anchored = true
 
-	Part:AddTag(IndestructibleTag)
+	Part:AddTag(Settings.INDESTRUCTIBLE_TAG)
 
-	Part.Parent = mapContainer
+	Part.Parent = State.MapContainer
 
 	return Part
 end
@@ -237,16 +220,16 @@ function PuppeteerLogic.CreatePuppetsFromServer(puppets, startIndex)
 	local index = startIndex
 	--debug.profilebegin("Create Puppets")
 	for _, serialPuppet in ipairs(puppets) do
-		local OldPuppetData = Puppets[index]
+		local OldPuppetData = State.Puppets[index]
 		if OldPuppetData then
-			DestroyPart(OldPuppetData[1])
-			PuppetsLerpData[index] = nil
+			DirtyGroupLogic.DestroyPart(OldPuppetData[1])
+			State.PuppetsLerpData[index] = nil
 		end
 
 		local Part = DeserializedPuppet(serialPuppet)
 
 		--
-		if PUPPET_TWEEN_MODE == "TRANSFORM" then
+		if Settings.PUPPET_TWEEN_MODE == "TRANSFORM" then
 			local Motor6D = Instance.new("Motor6D")
 			Motor6D.Enabled = false
 
@@ -257,7 +240,7 @@ function PuppeteerLogic.CreatePuppetsFromServer(puppets, startIndex)
 		end
 		--]]
 
-		Puppets[index] = { Part }
+		State.Puppets[index] = { Part }
 
 		index += 1
 		if index > Settings.PuppetMaxCount then
@@ -266,9 +249,9 @@ function PuppeteerLogic.CreatePuppetsFromServer(puppets, startIndex)
 	end
 	--FakePuppetOverrideIndex = State.PuppetNextIndex
 
-	if USE_OBJECT_CACHE then
+	if Settings.USE_OBJECT_CACHE then
 		State.ScheduledUpdate = false
-		CachedParts:Update()
+		State.CachedParts:Update()
 	end
 end
 
@@ -291,7 +274,7 @@ function PuppeteerLogic.ReplicatePuppetStatesFromServer(puppetStatesBuffer, step
 	local doNotTweenPuppets = not Settings.ClientTweenPuppets
 	while bitOffset < bitLength do
 		local index = buffer.readbits(puppetStatesBuffer, bitOffset + 99, 13)
-		local puppetData = Puppets[index]
+		local puppetData = State.Puppets[index]
 		if puppetData then
 			local cframe = CFrame.new(
 				ReadFloatI25(puppetStatesBuffer, bitOffset),
@@ -306,11 +289,11 @@ function PuppeteerLogic.ReplicatePuppetStatesFromServer(puppetStatesBuffer, step
 			local toPlr = clientCamPos - cframe.Position
 			-- Puppets outside of the interpolation distance limit are moved directly to their updated position in bulk (or if the interpolation setting is disabled)
 			if doNotTweenPuppets or (toPlr.X^2 + toPlr.Y^2 + toPlr.Z^2 >= sqLimit) then
-				if PuppetsLerpData[index] then
-					PuppetsLerpData[index] = nil
+				if State.PuppetsLerpData[index] then
+					State.PuppetsLerpData[index] = nil
 				end
 				--puppetData[1].CFrame = cframe
-				if PUPPET_TWEEN_MODE == "TRANSFORM" then
+				if Settings.PUPPET_TWEEN_MODE == "TRANSFORM" then
 					local Motor6D = puppetData[1]:FindFirstChildWhichIsA("Motor6D")
 					if not Motor6D.Enabled then
 						Motor6D.Enabled = true
@@ -323,7 +306,7 @@ function PuppeteerLogic.ReplicatePuppetStatesFromServer(puppetStatesBuffer, step
 					i += 1
 				end
 			else
-				PuppetsLerpData[index] = {
+				State.PuppetsLerpData[index] = {
 					puppetData[1].CFrame,
 					cframe,
 					0
@@ -341,14 +324,14 @@ end
 
 
 
-function PuppeteerLogic.PuppeteerHeartbeatBehavior(deltaTime)
-	local PQL = #CreatePuppetQueue
+function PuppeteerLogic.Heartbeat(deltaTime)
+	local PQL = #State.CreatePuppetQueue
 	if PQL > 0 then
 		local toReplicate = table.create(PQL)
-		for i, puppetToCreate in ipairs(CreatePuppetQueue) do
-			toReplicate[i] = SerializedPartInstance(puppetToCreate)
+		for i, puppetToCreate in ipairs(State.CreatePuppetQueue) do
+			toReplicate[i] = PartOperations.SerializedPartInstance(puppetToCreate)
 		end
-		table.clear(CreatePuppetQueue)
+		table.clear(State.CreatePuppetQueue)
 		Blink.CreatePuppets.FireAll(toReplicate, State.PuppetNextIndex - PQL)
 	end
 
@@ -359,7 +342,7 @@ function PuppeteerLogic.PuppeteerHeartbeatBehavior(deltaTime)
 			State.PuppetTimeAccumulation -= P
 		until State.PuppetTimeAccumulation < P
 
-		for i, puppetData in pairs(Puppets) do -- every time the period is reached, push all available voxel CFrames to their state replication queue
+		for i, puppetData in pairs(State.Puppets) do -- every time the period is reached, push all available voxel CFrames to their state replication queue
 			local puppetVoxel = puppetData[1]
 
 			if puppetVoxel.Anchored then continue end
@@ -368,7 +351,7 @@ function PuppeteerLogic.PuppeteerHeartbeatBehavior(deltaTime)
 				local d = puppetData[4] + deltaTime
 				if d >= Settings.PuppetAnchorTimeout then
 					puppetVoxel.Anchored = true
-					table.insert(PuppetsLerpData[i], 1, puppetVoxel.CFrame) -- replicate the final resting state of this voxel
+					table.insert(State.PuppetsLerpData[i], 1, puppetVoxel.CFrame) -- replicate the final resting state of this voxel
 					puppetData[4] = 0
 				else
 					puppetData[4] = d
@@ -378,7 +361,7 @@ function PuppeteerLogic.PuppeteerHeartbeatBehavior(deltaTime)
 
 			puppetData[4] = 0
 
-			table.insert(PuppetsLerpData[i], 1, puppetVoxel.CFrame)
+			table.insert(State.PuppetsLerpData[i], 1, puppetVoxel.CFrame)
 		end
 
 		local AvailablePuppets = {}
@@ -391,12 +374,12 @@ function PuppeteerLogic.PuppeteerHeartbeatBehavior(deltaTime)
 			end
 			if State.PuppetNextReplicationIndex == StartIndex then break end
 
-			local puppetData = Puppets[ReplicationIndex]
+			local puppetData = State.Puppets[ReplicationIndex]
 			if not puppetData then continue end
 
-			if #PuppetsLerpData[ReplicationIndex] == 0 then continue end
+			if #State.PuppetsLerpData[ReplicationIndex] == 0 then continue end
 
-			if table.find(CreatePuppetQueue, puppetData[1]) then continue end
+			if table.find(State.CreatePuppetQueue, puppetData[1]) then continue end
 
 			table.insert(AvailablePuppets, ReplicationIndex)
 		end
@@ -406,7 +389,7 @@ function PuppeteerLogic.PuppeteerHeartbeatBehavior(deltaTime)
 			local puppetStates = buffer.create(countToReplicate * 14)
 
 			for i, ReplicationIndex in ipairs(AvailablePuppets) do
-				--local puppetVoxel = Puppets[ReplicationIndex][1]
+				--local puppetVoxel = State.Puppets[ReplicationIndex][1]
 
 				--[[
 				i25 - X
@@ -424,7 +407,7 @@ function PuppeteerLogic.PuppeteerHeartbeatBehavior(deltaTime)
 
 				local bufferBitOffset = (i - 1) * 112
 
-				local cframe = table.remove(PuppetsLerpData[ReplicationIndex])
+				local cframe = table.remove(State.PuppetsLerpData[ReplicationIndex])
 				WriteFloatI25(puppetStates, bufferBitOffset, cframe.X)
 				WriteFloatI25(puppetStates, bufferBitOffset + 25, cframe.Y)
 				WriteFloatI25(puppetStates, bufferBitOffset + 50, cframe.Z)
@@ -438,7 +421,7 @@ function PuppeteerLogic.PuppeteerHeartbeatBehavior(deltaTime)
 			end
 
 			local stepDelta = 0
-			for _, queuedCFrames in pairs(PuppetsLerpData) do
+			for _, queuedCFrames in pairs(State.PuppetsLerpData) do
 				if #queuedCFrames == 0 then continue end
 				stepDelta += 1
 			end
@@ -455,14 +438,14 @@ if isServer then return PuppeteerLogic end
 
 -- Client side interpolation loop that "tweens" every puppet voxel and moves them in bulk
 RunService.PreRender:Connect(function(deltaTime)
-	if not next(PuppetsLerpData) then return end
+	if not next(State.PuppetsLerpData) then return end
 
 	--debug.profilebegin("Direct set CFrame Puppets")
 	local P = State.ClientPuppetStepDelta / Settings.PuppetReplicationFrequency
 
 	local i = 1
 	local puppets, interpolatedPositions, finishedLerps = {}, {}, {}
-	for index, lerpData in pairs(PuppetsLerpData) do
+	for index, lerpData in pairs(State.PuppetsLerpData) do
 		local d = lerpData[3] + deltaTime
 		if d >= P then
 			d = P
@@ -473,22 +456,22 @@ RunService.PreRender:Connect(function(deltaTime)
 
 		local newPos = d < P and lerpData[1]:Lerp(lerpData[2], d / P) or lerpData[2]
 
-		if PUPPET_TWEEN_MODE == "TRANSFORM" then
-			local Motor6D = Puppets[index][1]:FindFirstChildWhichIsA("Motor6D")
+		if Settings.PUPPET_TWEEN_MODE == "TRANSFORM" then
+			local Motor6D = State.Puppets[index][1]:FindFirstChildWhichIsA("Motor6D")
 			if not Motor6D.Enabled then
 				Motor6D.Enabled = true
-				Puppets[index][1].Anchored = false
+				State.Puppets[index][1].Anchored = false
 			end
 			Motor6D.Transform = newPos
 		else
 			interpolatedPositions[i] = newPos
-			puppets[i] = Puppets[index][1]
+			puppets[i] = State.Puppets[index][1]
 			i += 1
 		end
 	end
 
 	for _, index in ipairs(finishedLerps) do
-		PuppetsLerpData[index] = nil
+		State.PuppetsLerpData[index] = nil
 	end
 
 	if i > 1 then
@@ -502,13 +485,13 @@ end)
 --[[
 function Shatterbox.FakeClientPuppets(fakePuppets : { Part })
 	for _, fake in ipairs(fakePuppets) do
-		local OldPuppetData = Puppets[FakePuppetOverrideIndex]
+		local OldPuppetData = State.Puppets[FakePuppetOverrideIndex]
 		if OldPuppetData then
-			DestroyPart(OldPuppetData[1])
-			PuppetsLerpData[FakePuppetOverrideIndex] = nil
+			DirtyGroupLogic.DestroyPart(OldPuppetData[1])
+			State.PuppetsLerpData[FakePuppetOverrideIndex] = nil
 		end
 
-		Puppets[FakePuppetOverrideIndex] = { fake }
+		State.Puppets[FakePuppetOverrideIndex] = { fake }
 
 		FakePuppetOverrideIndex += 1
 		if FakePuppetOverrideIndex > Settings.PuppetMaxCount then

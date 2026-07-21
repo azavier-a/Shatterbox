@@ -7,21 +7,12 @@ local core = script.Parent.Parent
 local src = core.Parent
 local lib = core:WaitForChild("lib")
 
+local Settings = require(src:WaitForChild("Settings"))
 local Types = require(src:WaitForChild("Types"))
 
-local Settings = require(src:WaitForChild("Settings"))
-local DebrisTag = Settings.DEBRIS_TAG
-
 local SubdivideFunctions = require(lib:WaitForChild("SubdivideFunctions"))
-local ExtentInfo = SubdivideFunctions.ExtentInfo
 
 local State = require(core:WaitForChild("State"))
-
-local DirtyGroupData = State.DirtyGroupData
-local DirtyGroupMembers = State.DirtyGroupMembers
-
-local ImaginaryDestroyQueue = State.ImaginaryDestroyQueue
-local GreedyMeshedImaginaryParts = State.GreedyMeshedImaginaryParts
 
 
 local EPSILON_VECTOR = Vector3.one * 1e-3
@@ -76,8 +67,8 @@ end
 
 
 function GreedyMeshLogic.GreedyMesh(DirtyGroupID : string, ImaginaryParts : { Types.ImaginaryBox })
-	local dirtyGroupData = DirtyGroupData[DirtyGroupID]
-	local dirtyGroupMembers = DirtyGroupMembers[DirtyGroupID]
+	local dirtyGroupData = State.DirtyGroupData[DirtyGroupID]
+	local dirtyGroupMembers = State.DirtyGroupMembers[DirtyGroupID]
 
 	local Original = dirtyGroupData.OriginalPart
 
@@ -88,7 +79,7 @@ function GreedyMeshLogic.GreedyMesh(DirtyGroupID : string, ImaginaryParts : { Ty
 
 	-- The bounding area of Greedy Meshing, defined by the original part before it was ever destroyed
 	local OriginalCFrame = Original.CFrame
-	local groupMin = ExtentInfo(OriginalCFrame, VoxelSize, GridLength)
+	local groupMin = SubdivideFunctions.ExtentInfo(OriginalCFrame, VoxelSize, GridLength)
 	local halfSize = Original.Size * 0.5
 	local groupMinCornerCFrame = OriginalCFrame - (OriginalCFrame.XVector*halfSize.X) - (OriginalCFrame.YVector*halfSize.Y) - (OriginalCFrame.ZVector*halfSize.Z)
 	local STATEDIMZ = math.ceil(DIMZ / 32)
@@ -107,16 +98,16 @@ function GreedyMeshLogic.GreedyMesh(DirtyGroupID : string, ImaginaryParts : { Ty
 	local count = 0
 
 	for member in pairs(dirtyGroupMembers) do
-		if member:HasTag(DebrisTag) then continue end
+		if member:HasTag(Settings.DEBRIS_TAG) then continue end
 
 		table.insert(OriginalParts, member)
 
-		if ImaginaryDestroyQueue[member] then continue end
+		if State.ImaginaryDestroyQueue[member] then continue end
 
 		local n = InitGreedyState(member, VoxelSize, groupMinCornerCFrame, GMState, DIMYSTATEDIMZ, STATEDIMZ)
 		if n then
 			count += n
-			ImaginaryDestroyQueue[member] = true
+			State.ImaginaryDestroyQueue[member] = true
 		end
 	end
 
@@ -128,7 +119,7 @@ function GreedyMeshLogic.GreedyMesh(DirtyGroupID : string, ImaginaryParts : { Ty
 	end
 
 	if count == 0 then
-		table.move(ImaginaryParts, 1, #ImaginaryParts, #GreedyMeshedImaginaryParts + 1, GreedyMeshedImaginaryParts)
+		table.move(ImaginaryParts, 1, #ImaginaryParts, #State.GreedyMeshedImaginaryParts + 1, State.GreedyMeshedImaginaryParts)
 		return
 	end
 
@@ -280,12 +271,12 @@ function GreedyMeshLogic.GreedyMesh(DirtyGroupID : string, ImaginaryParts : { Ty
 		end
 		if index then
 			table.remove(OriginalParts, index)
-			ImaginaryDestroyQueue[found] = nil
+			State.ImaginaryDestroyQueue[found] = nil
 		else
-			table.insert(GreedyMeshedImaginaryParts, meshedInfo)
+			table.insert(State.GreedyMeshedImaginaryParts, meshedInfo)
 		end
 	end
-	--table.move(meshed, 1, #meshed, #GreedyMeshedImaginaryParts + 1, GreedyMeshedImaginaryParts)
+	--table.move(meshed, 1, #meshed, #State.GreedyMeshedImaginaryParts + 1, State.GreedyMeshedImaginaryParts)
 end
 
 

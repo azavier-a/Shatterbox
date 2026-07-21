@@ -16,32 +16,11 @@ local src = core.Parent
 --local Types = require(src:WaitForChild("Types"))
 
 local Settings = require(src:WaitForChild("Settings"))
-local USE_CLIENT_SERVER = Settings.USE_CLIENT_SERVER
-local USE_OBJECT_CACHE = Settings.USE_OBJECT_CACHE
-
-local DirtyGroupIDAttribute = Settings.DIRTY_GROUP_ID_ATTRIBUTE_NAME
 
 local VertexMath = require(lib:WaitForChild("VertexMath"))
-local BlockContainsPoint = VertexMath.PartTypeContainsPoint.Block
-
 local PartOperations = require(lib:WaitForChild("PartOperations"))
-local PartFromTemplate = PartOperations.PartFromTemplate
 
 local State = require(core:WaitForChild("State"))
-local IsPuppet = State.IsPuppet
-
-local CachedParts = State.CachedParts
-
-local mapContainer = State.MapContainer
-
-local DirtyGroupData = State.DirtyGroupData
-local DirtyGroupMembers = State.DirtyGroupMembers
-
-local SmoothCleanupQueue = State.SmoothCleanupQueue
-
-local Puppets = State.Puppets
-
-
 
 
 local function GetCondensedGUID()
@@ -111,17 +90,17 @@ local axisUVMap = {
 --Instantiates a new member of a dirty group using the group ID and a given CFrame and Size
 local function InstantiatePart(DirtyGroupID, cframe, size, doNotUseObjectCache)
 	--debug.profilebegin("InstantiatePart")
-	local dirtyGroupData, dirtyGroupMembers = DirtyGroupData[DirtyGroupID], DirtyGroupMembers[DirtyGroupID]
+	local dirtyGroupData, dirtyGroupMembers = State.DirtyGroupData[DirtyGroupID], State.DirtyGroupMembers[DirtyGroupID]
 
-	local part = PartFromTemplate(dirtyGroupData.OriginalPart, cframe, not doNotUseObjectCache and CachedParts)
+	local part = PartOperations.PartFromTemplate(dirtyGroupData.OriginalPart, cframe, not doNotUseObjectCache and State.CachedParts)
 	part.Size = size
 
 	local partIsDivisible = part:IsA("Part") and part.Shape == Enum.PartType.Block
 
-	if not USE_CLIENT_SERVER or not partIsDivisible then
+	if not Settings.USE_CLIENT_SERVER or not partIsDivisible then
 		part.Parent = dirtyGroupData.OriginalParent
 	else
-		part.Parent = mapContainer
+		part.Parent = State.MapContainer
 	end
 
 	if partIsDivisible and part:FindFirstChildWhichIsA("Texture") then
@@ -146,7 +125,7 @@ local function InstantiatePart(DirtyGroupID, cframe, size, doNotUseObjectCache)
 
 	dirtyGroupMembers[part] = true
 
-	if USE_OBJECT_CACHE then
+	if Settings.USE_OBJECT_CACHE then
 		State.ScheduledUpdate = true
 	end
 	--debug.profileend()
@@ -159,10 +138,10 @@ DirtyGroupLogic.InstantiatePart = InstantiatePart
 --Destroys a member of a dirty group using the part itself
 local function DestroyPart(part : BasePart)
 	--debug.profilebegin("DestroyPart")
-	local DirtyGroupID = part:GetAttribute(DirtyGroupIDAttribute)
+	local DirtyGroupID = part:GetAttribute(Settings.DIRTY_GROUP_ID_ATTRIBUTE_NAME)
 	if not DirtyGroupID then return end
 
-	local dirtyGroupData, dirtyGroupMembers = DirtyGroupData[DirtyGroupID], DirtyGroupMembers[DirtyGroupID]
+	local dirtyGroupData, dirtyGroupMembers = State.DirtyGroupData[DirtyGroupID], State.DirtyGroupMembers[DirtyGroupID]
 
 	if dirtyGroupData and part == dirtyGroupData.OriginalPart then
 		part.Parent = nil
@@ -171,15 +150,15 @@ local function DestroyPart(part : BasePart)
 			dirtyGroupMembers[part] = nil
 		end
 
-		local puppetID = IsPuppet(part)
+		local puppetID = State.IsPuppet(part)
 
-		if USE_OBJECT_CACHE and CachedParts:IsInUse(part) then
+		if Settings.USE_OBJECT_CACHE and State.CachedParts:IsInUse(part) then
 			if not part.Anchored then
 				part.Anchored = true
 			end
 
 			if puppetID and isServer then
-				Puppets[puppetID][2]()
+				State.Puppets[puppetID][2]()
 			end
 
 			part:ClearAllChildren()
@@ -194,7 +173,7 @@ local function DestroyPart(part : BasePart)
 			end
 
 			part.CanCollide = false
-			CachedParts:ReturnPart(part)
+			State.CachedParts:ReturnPart(part)
 
 			State.ScheduledUpdate = true
 		else
@@ -211,13 +190,13 @@ DirtyGroupLogic.DestroyPart = DestroyPart
 local function PopulateDirtyGroup(Part : Part, DirtyGroupID : string?)
 	-- populate the initial dirty group information if there is no group associated with this part
 	DirtyGroupID = DirtyGroupID or GetCondensedGUID()
-	Part:SetAttribute(DirtyGroupIDAttribute, DirtyGroupID)
+	Part:SetAttribute(Settings.DIRTY_GROUP_ID_ATTRIBUTE_NAME, DirtyGroupID)
 
 	local GridSize = Part:GetAttribute("GridSize") or Settings.DefaultGridSize
 
 	local roundedGridLength = RoundAxisNearestPowerOf2(Vector3.one:Max(Part.Size // GridSize))
 
-	DirtyGroupData[DirtyGroupID] = {
+	State.DirtyGroupData[DirtyGroupID] = {
 		OriginalPart = Part,
 		OriginalParent = Part.Parent,
 
@@ -225,15 +204,15 @@ local function PopulateDirtyGroup(Part : Part, DirtyGroupID : string?)
 		MaxGridLength = roundedGridLength,
 		VoxelSize = Part.Size / roundedGridLength
 	}
-	DirtyGroupMembers[DirtyGroupID] = {}
+	State.DirtyGroupMembers[DirtyGroupID] = {}
 
-	if USE_CLIENT_SERVER and Part:IsA("Part") and Part.Shape == Enum.PartType.Block then
+	if Settings.USE_CLIENT_SERVER and Part:IsA("Part") and Part.Shape == Enum.PartType.Block then
 		-- Inheritance of ancestor tags (hierarchy only changes with client server enabled)
 		for _, tag in ipairs(AncestorGroupTags(Part)) do
             Part:AddTag(tag)
         end
-		-- Put the part into the mapContainer (client side is "ClientMap" folder, server side is `workspace.CurrentCamera`)
-		Part.Parent = mapContainer
+		-- Put the part into the State.MapContainer (client side is "ClientMap" folder, server side is `workspace.CurrentCamera`)
+		Part.Parent = State.MapContainer
 	end
 
 	return DirtyGroupID
@@ -245,16 +224,16 @@ DirtyGroupLogic.PopulateDirtyGroup = PopulateDirtyGroup
 -- Undoes the given destruction identified by it's DestructionID. `replicated` is true only if the server is telling a client to undo a destruction
 local function UndoDirtyGroup(DirtyGroupID : string)
 	-- Restore the original part and delete all current members
-	local groupData = DirtyGroupData[DirtyGroupID]
-	local groupMembers = DirtyGroupMembers[DirtyGroupID]
+	local groupData = State.DirtyGroupData[DirtyGroupID]
+	local groupMembers = State.DirtyGroupMembers[DirtyGroupID]
 
 	groupData.MaxGridLength = groupData.GridLength
 
 	local OriginalPart = groupData.OriginalPart
-	if not USE_CLIENT_SERVER or not OriginalPart:IsA("Part") or OriginalPart.Shape ~= Enum.PartType.Block then
+	if not Settings.USE_CLIENT_SERVER or not OriginalPart:IsA("Part") or OriginalPart.Shape ~= Enum.PartType.Block then
 		OriginalPart.Parent = groupData.OriginalParent
 	else
-		OriginalPart.Parent = mapContainer
+		OriginalPart.Parent = State.MapContainer
 	end
 
 	for member in pairs(groupMembers) do
@@ -262,19 +241,19 @@ local function UndoDirtyGroup(DirtyGroupID : string)
     end
 	table.clear(groupMembers)
 
-	SmoothCleanupQueue[DirtyGroupID] = nil
+	State.SmoothCleanupQueue[DirtyGroupID] = nil
 end
 DirtyGroupLogic.UndoDirtyGroup = UndoDirtyGroup
 
 
 
-function DirtyGroupLogic.SmoothCleanupHeartbeatBehavior(deltaTime : number)
+function DirtyGroupLogic.SmoothCleanupHeartbeat(deltaTime : number)
 	local toReset = {}
 
-	for DirtyGroupID, countdown in pairs(SmoothCleanupQueue) do
+	for DirtyGroupID, countdown in pairs(State.SmoothCleanupQueue) do
 		countdown -= deltaTime
 		if countdown > 0 then
-			SmoothCleanupQueue[DirtyGroupID] = countdown
+			State.SmoothCleanupQueue[DirtyGroupID] = countdown
 		else
 			toReset[DirtyGroupID] = true
 		end
@@ -282,7 +261,7 @@ function DirtyGroupLogic.SmoothCleanupHeartbeatBehavior(deltaTime : number)
 
 	for DirtyGroupID in pairs(toReset) do
 		if Settings.BlockCleanupWhileCharacterInside then
-            local dirtyGroupData = DirtyGroupData[DirtyGroupID]
+            local dirtyGroupData = State.DirtyGroupData[DirtyGroupID]
 			local OriginalPart = dirtyGroupData.OriginalPart
 			local shouldSkip = false
 			for _, plr in ipairs(Players:GetPlayers()) do
@@ -290,7 +269,7 @@ function DirtyGroupLogic.SmoothCleanupHeartbeatBehavior(deltaTime : number)
 				if not chr then continue end
 				local hrp = chr:FindFirstChild("HumanoidRootPart")
 				if not hrp then continue end
-				if BlockContainsPoint(OriginalPart.CFrame, OriginalPart.Size, hrp.Position) then
+				if VertexMath.PartTypeContainsPoint.Block(OriginalPart.CFrame, OriginalPart.Size, hrp.Position) then
 					shouldSkip = true
 					break
 				end

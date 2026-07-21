@@ -9,9 +9,8 @@ local src = core.Parent
 
 local HttpService = game:GetService("HttpService")
 
-local Types = require(src:WaitForChild("Types"))
-
 local Settings = require(src:WaitForChild("Settings"))
+local Types = require(src:WaitForChild("Types"))
 
 
 local WHITE = Color3.new(1, 1, 1)

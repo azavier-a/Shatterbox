@@ -11,7 +11,6 @@ local localAxisVectors = { X = "RightVector", Y = "UpVector", Z = "ZVector" }
 local axisID = {"X", "Y", "Z"}
 
 
-
 local PartTypeContainsPoint = {}
 
 function PartTypeContainsPoint.Ball(cframe : CFrame, size : Vector3, p : Vector3)

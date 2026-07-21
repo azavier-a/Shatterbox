@@ -5,16 +5,12 @@ local core = script.Parent
 local lib = core:WaitForChild("lib")
 local src = core.Parent
 
-local RunService = game:GetService("RunService")
 local CollectionService = game:GetService("CollectionService")
-
+local RunService = game:GetService("RunService")
 local isServer, isClient = RunService:IsServer(), RunService:IsClient()
 
 local Settings = require(src:WaitForChild("Settings"))
-
 local Types = require(src:WaitForChild("Types"))
-
-local USE_OBJECT_CACHE = Settings.USE_OBJECT_CACHE
 
 
 local Blink, mapContainer, effectsModuleCallbacks
@@ -60,7 +56,7 @@ end
 
 
 local ObjectCache, CachedParts
-if USE_OBJECT_CACHE then
+if Settings.USE_OBJECT_CACHE then
 
 	local TemplatePart = Instance.new("Part")
 	TemplatePart.Anchored = true
@@ -162,8 +158,8 @@ local overlapParams = OverlapParams.new()
 PreAllocated.OverlapParams = overlapParams
 -- Pre-allocated RaycastParams when SkipWalls or SkipFloors is enabled
 local raycastParams = RaycastParams.new()
-PreAllocated.RaycastParams = raycastParams
 raycastParams.FilterType = Enum.RaycastFilterType.Include
+PreAllocated.RaycastParams = raycastParams
 -- pre-allocated part instance which is used to get the parts whenever `GetPartsInPart` is needed
 PreAllocated.IntersectingPart = Instance.new("Part")
 
