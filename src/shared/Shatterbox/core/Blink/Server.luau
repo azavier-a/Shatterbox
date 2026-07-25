@@ -154,11 +154,11 @@ local Queue: any = {
     Unreliable = table.create(256)
 }
 
-Events.Reliable[4] = {}
-Queue.Reliable[4] = table.create(256)
-Queue.Reliable[8] = table.create(256)
-Events.Reliable[9] = {}
+Events.Reliable[5] = {}
+Queue.Reliable[5] = table.create(256)
 Queue.Reliable[9] = table.create(256)
+Events.Reliable[10] = {}
+Queue.Reliable[10] = table.create(256)
 export type GUID = string
 export type Vec2 = { number }
 export type Decal = { Color3: Color3?, ColorMap: string?, Transparency: number?, UVOffset: { number }?, UVScale: { number }?, ZIndex: number?, Face: number? }
@@ -195,10 +195,17 @@ local function WriteEVENT_SignalResetArea(Value1: CFrame, Value2: Vector3): ()
 	buffer.writef32(SendBuffer, BLOCK_START + 33, Vector.Z)
 end
 
+local function WriteEVENT_SignalResetDirtyGroup(Value: string): ()
+	-- Allocate BLOCK: 33 bytes
+	local BLOCK_START = Allocate(33)
+	buffer.writeu8(SendBuffer, BLOCK_START + 0, 2)
+	buffer.writestring(SendBuffer, BLOCK_START + 1, Value, 32)
+end
+
 local function WriteEVENT_CreatePuppets(Value1: { { CFrame: CFrame, Size: Vector3, Anchored: boolean, Color: Color3?, Material: number?, Transparency: number?, Reflectance: number?, MaterialVariant: string?, CollisionGroup: string?, CanCollide: boolean, LeftSurface: number?, RightSurface: number?, FrontSurface: number?, BackSurface: number?, TopSurface: number?, BottomSurface: number?, Textures: { { Color3: Color3?, ColorMap: string?, Transparency: number?, UVOffset: { number }?, UVScale: { number }?, ZIndex: number?, Face: number?, OffsetStudsU: number?, OffsetStudsV: number?, StudsPerTileU: number?, StudsPerTileV: number? } }?, Lights: { { ClassName: string, Brightness: number?, Color: Color3?, Shadows: boolean?, Range: number?, Angle: number?, Face: number? } }?, Decals: { { Color3: Color3?, ColorMap: string?, Transparency: number?, UVOffset: { number }?, UVScale: { number }?, ZIndex: number?, Face: number? } }?, Attributes: {[string]: any}, Tags: { string } } }, Value2: number): ()
 	-- Allocate BLOCK: 5 bytes
 	local BLOCK_START = Allocate(5)
-	buffer.writeu8(SendBuffer, BLOCK_START + 0, 2)
+	buffer.writeu8(SendBuffer, BLOCK_START + 0, 3)
 	-- START ARRAY
 	buffer.writeu16(SendBuffer, BLOCK_START + 1, #Value1)
 		-- Allocate BLOCK: 57 bytes
@@ -782,7 +789,7 @@ end
 local function WriteEVENT_DestroyPuppet(Value: number): ()
 	-- Allocate BLOCK: 3 bytes
 	local BLOCK_START = Allocate(3)
-	buffer.writeu8(SendBuffer, BLOCK_START + 0, 3)
+	buffer.writeu8(SendBuffer, BLOCK_START + 0, 4)
 	buffer.writeu16(SendBuffer, BLOCK_START + 1, Value)
 end
 
@@ -807,7 +814,7 @@ end
 local function WriteEVENT_CreateDirtyGroupsFromServer(Value: {[string]: { CFrame: CFrame, Size: Vector3, Anchored: boolean, Color: Color3?, Material: number?, Transparency: number?, Reflectance: number?, MaterialVariant: string?, CollisionGroup: string?, CanCollide: boolean, LeftSurface: number?, RightSurface: number?, FrontSurface: number?, BackSurface: number?, TopSurface: number?, BottomSurface: number?, Textures: { { Color3: Color3?, ColorMap: string?, Transparency: number?, UVOffset: { number }?, UVScale: { number }?, ZIndex: number?, Face: number?, OffsetStudsU: number?, OffsetStudsV: number?, StudsPerTileU: number?, StudsPerTileV: number? } }?, Lights: { { ClassName: string, Brightness: number?, Color: Color3?, Shadows: boolean?, Range: number?, Angle: number?, Face: number? } }?, Decals: { { Color3: Color3?, ColorMap: string?, Transparency: number?, UVOffset: { number }?, UVScale: { number }?, ZIndex: number?, Face: number? } }?, Attributes: {[string]: any}, Tags: { string } }}): ()
 	-- Allocate BLOCK: 3 bytes
 	local BLOCK_START = Allocate(3)
-	buffer.writeu8(SendBuffer, BLOCK_START + 0, 5)
+	buffer.writeu8(SendBuffer, BLOCK_START + 0, 6)
 	local Elements_1 = 0
 	for Key_1, Element_1 in Value do
 		Elements_1 += 1
@@ -1322,7 +1329,7 @@ end
 local function WriteEVENT_ReplicateState(Value1: {[string]: { OriginalPart: { CFrame: CFrame, Size: Vector3, Anchored: boolean, Color: Color3?, Material: number?, Transparency: number?, Reflectance: number?, MaterialVariant: string?, CollisionGroup: string?, CanCollide: boolean, LeftSurface: number?, RightSurface: number?, FrontSurface: number?, BackSurface: number?, TopSurface: number?, BottomSurface: number?, Textures: { { Color3: Color3?, ColorMap: string?, Transparency: number?, UVOffset: { number }?, UVScale: { number }?, ZIndex: number?, Face: number?, OffsetStudsU: number?, OffsetStudsV: number?, StudsPerTileU: number?, StudsPerTileV: number? } }?, Lights: { { ClassName: string, Brightness: number?, Color: Color3?, Shadows: boolean?, Range: number?, Angle: number?, Face: number? } }?, Decals: { { Color3: Color3?, ColorMap: string?, Transparency: number?, UVOffset: { number }?, UVScale: { number }?, ZIndex: number?, Face: number? } }?, Attributes: {[string]: any}, Tags: { string } }, GridLength: Vector3, MaxGridLength: Vector3 }}, Value2: {[string]: { { CFrame: CFrame, Size: Vector3, Anchored: boolean, Color: Color3?, Material: number?, Transparency: number?, Reflectance: number?, MaterialVariant: string?, CollisionGroup: string?, CanCollide: boolean, LeftSurface: number?, RightSurface: number?, FrontSurface: number?, BackSurface: number?, TopSurface: number?, BottomSurface: number?, Textures: { { Color3: Color3?, ColorMap: string?, Transparency: number?, UVOffset: { number }?, UVScale: { number }?, ZIndex: number?, Face: number?, OffsetStudsU: number?, OffsetStudsV: number?, StudsPerTileU: number?, StudsPerTileV: number? } }?, Lights: { { ClassName: string, Brightness: number?, Color: Color3?, Shadows: boolean?, Range: number?, Angle: number?, Face: number? } }?, Decals: { { Color3: Color3?, ColorMap: string?, Transparency: number?, UVOffset: { number }?, UVScale: { number }?, ZIndex: number?, Face: number? } }?, Attributes: {[string]: any}, Tags: { string } } }}, Value3: {[string]: boolean}, Value4: {[string]: number}, Value5: {[number]: { CFrame: CFrame, Size: Vector3, Anchored: boolean, Color: Color3?, Material: number?, Transparency: number?, Reflectance: number?, MaterialVariant: string?, CollisionGroup: string?, CanCollide: boolean, LeftSurface: number?, RightSurface: number?, FrontSurface: number?, BackSurface: number?, TopSurface: number?, BottomSurface: number?, Textures: { { Color3: Color3?, ColorMap: string?, Transparency: number?, UVOffset: { number }?, UVScale: { number }?, ZIndex: number?, Face: number?, OffsetStudsU: number?, OffsetStudsV: number?, StudsPerTileU: number?, StudsPerTileV: number? } }?, Lights: { { ClassName: string, Brightness: number?, Color: Color3?, Shadows: boolean?, Range: number?, Angle: number?, Face: number? } }?, Decals: { { Color3: Color3?, ColorMap: string?, Transparency: number?, UVOffset: { number }?, UVScale: { number }?, ZIndex: number?, Face: number? } }?, Attributes: {[string]: any}, Tags: { string } }}, Value6: number): ()
 	-- Allocate BLOCK: 13 bytes
 	local BLOCK_START = Allocate(13)
-	buffer.writeu8(SendBuffer, BLOCK_START + 0, 6)
+	buffer.writeu8(SendBuffer, BLOCK_START + 0, 7)
 	local Elements_1 = 0
 	for Key_1, Element_1 in Value1 do
 		Elements_1 += 1
@@ -2953,7 +2960,7 @@ end
 local function WriteEVENT_ReplicateDestruction(Value1: string, Value2: { ID: string, CuttingPart: { CFrame: CFrame, Size: Vector3, Shape: number }, WaitForClientTimeout: number?, FilterTagged: { string }?, GridSize: number?, CleanupDelay: number?, SkipWalls: boolean?, SkipFloors: boolean?, SkipEncapsulatedVoxels: boolean?, ManualVoxelInstantiation: boolean?, OnVoxelDestruct: string?, OnDestructCompleted: string?, UserData: any? }, Value3: {[string]: { OriginalPart: { CFrame: CFrame, Size: Vector3, Anchored: boolean, Color: Color3?, Material: number?, Transparency: number?, Reflectance: number?, MaterialVariant: string?, CollisionGroup: string?, CanCollide: boolean, LeftSurface: number?, RightSurface: number?, FrontSurface: number?, BackSurface: number?, TopSurface: number?, BottomSurface: number?, Textures: { { Color3: Color3?, ColorMap: string?, Transparency: number?, UVOffset: { number }?, UVScale: { number }?, ZIndex: number?, Face: number?, OffsetStudsU: number?, OffsetStudsV: number?, StudsPerTileU: number?, StudsPerTileV: number? } }?, Lights: { { ClassName: string, Brightness: number?, Color: Color3?, Shadows: boolean?, Range: number?, Angle: number?, Face: number? } }?, Decals: { { Color3: Color3?, ColorMap: string?, Transparency: number?, UVOffset: { number }?, UVScale: { number }?, ZIndex: number?, Face: number? } }?, Attributes: {[string]: any}, Tags: { string } }, GridLength: Vector3, MaxGridLength: Vector3 }}): ()
 	-- Allocate BLOCK: 85 bytes
 	local BLOCK_START = Allocate(85)
-	buffer.writeu8(SendBuffer, BLOCK_START + 0, 7)
+	buffer.writeu8(SendBuffer, BLOCK_START + 0, 8)
 	local Length = #Value1
 	buffer.writeu16(SendBuffer, BLOCK_START + 1, Length)
 	Allocate(Length)
@@ -3596,7 +3603,7 @@ end
 local function WriteEVENT_SignalPrintState(Value: nil): ()
 	-- Allocate BLOCK: 1 bytes
 	local BLOCK_START = Allocate(1)
-	buffer.writeu8(SendBuffer, BLOCK_START + 0, 10)
+	buffer.writeu8(SendBuffer, BLOCK_START + 0, 11)
 end
 
 if not RunService:IsRunning() then
@@ -3609,6 +3616,12 @@ if not RunService:IsRunning() then
 		FireExcept = NOOP
 	},
 	SignalResetArea = {
+		Fire = NOOP,
+		FireAll = NOOP,
+		FireList = NOOP,
+		FireExcept = NOOP
+	},
+	SignalResetDirtyGroup = {
 		Fire = NOOP,
 		FireAll = NOOP,
 		FireList = NOOP,
@@ -3721,39 +3734,39 @@ Reliable.OnServerEvent:Connect(function(Player: Player, Buffer: buffer, Instance
 		-- Read BLOCK: 1 bytes
 		local BLOCK_START = Read(1)
 		local Index = buffer.readu8(RecieveBuffer, BLOCK_START + 0)
-		if Index == 4 then
+		if Index == 5 then
 			local Value: {[string]: Part} = ReadEVENT_CreateDirtyGroupsFromClient()
-			if #Events.Reliable[4] > 0 then
-				for _, Listener in Events.Reliable[4] do
+			if #Events.Reliable[5] > 0 then
+				for _, Listener in Events.Reliable[5] do
 					task.spawn(Listener, Player, Value)
 				end
 			else
-				if #Queue.Reliable[4] > 256 then
+				if #Queue.Reliable[5] > 256 then
 					warn("[Blink]: Event queue of \"CreateDirtyGroupsFromClient\" exceeded 256, did you forget to implement a listener?")
 				end
-				table.insert(Queue.Reliable[4], {Player, Value} :: {any})
-			end
-		elseif Index == 8 then
-			local Value: nil = ReadEVENT_ClientInitComplete()
-			if Events.Reliable[8] ~= nil then
-				task.spawn(Events.Reliable[8], Player, Value)
-			else
-				if #Queue.Reliable[8] > 256 then
-					warn("[Blink]: Event queue of \"ClientInitComplete\" exceeded 256, did you forget to implement a listener?")
-				end
-				table.insert(Queue.Reliable[8], {Player, Value} :: {any})
+				table.insert(Queue.Reliable[5], {Player, Value} :: {any})
 			end
 		elseif Index == 9 then
+			local Value: nil = ReadEVENT_ClientInitComplete()
+			if Events.Reliable[9] ~= nil then
+				task.spawn(Events.Reliable[9], Player, Value)
+			else
+				if #Queue.Reliable[9] > 256 then
+					warn("[Blink]: Event queue of \"ClientInitComplete\" exceeded 256, did you forget to implement a listener?")
+				end
+				table.insert(Queue.Reliable[9], {Player, Value} :: {any})
+			end
+		elseif Index == 10 then
 			local Value: string = ReadEVENT_ClientRecievedMapParts()
-			if #Events.Reliable[9] > 0 then
-				for _, Listener in Events.Reliable[9] do
+			if #Events.Reliable[10] > 0 then
+				for _, Listener in Events.Reliable[10] do
 					task.spawn(Listener, Player, Value)
 				end
 			else
-				if #Queue.Reliable[9] > 256 then
+				if #Queue.Reliable[10] > 256 then
 					warn("[Blink]: Event queue of \"ClientRecievedMapParts\" exceeded 256, did you forget to implement a listener?")
 				end
-				table.insert(Queue.Reliable[9], {Player, Value} :: {any})
+				table.insert(Queue.Reliable[10], {Player, Value} :: {any})
 			end
 		end
 	end
@@ -3854,6 +3867,52 @@ local Returns = table.freeze({
 		FireExcept = function(Except: Player, Value1: CFrame, Value2: Vector3): ()
 			Load()
 			WriteEVENT_SignalResetArea(Value1, Value2)
+			local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
+			for _, Player in Players:GetPlayers() do
+				if Player == Except then
+					continue
+				end
+				Load(PlayersMap[Player])
+				local Position = Allocate(Size)
+				buffer.copy(SendBuffer, Position, Buffer, 0, Size)
+				table.move(Instances, 1, #Instances, #SendInstances + 1, SendInstances)
+				PlayersMap[Player] = Save()
+			end
+		end,
+	},
+	SignalResetDirtyGroup = {
+		Fire = function(Player: Player, Value: string): ()
+			Load(PlayersMap[Player])
+			WriteEVENT_SignalResetDirtyGroup(Value)
+			PlayersMap[Player] = Save()
+		end,
+		FireAll = function(Value: string): ()
+			Load()
+			WriteEVENT_SignalResetDirtyGroup(Value)
+			local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
+			for _, Player in Players:GetPlayers() do
+				Load(PlayersMap[Player])
+				local Position = Allocate(Size)
+				buffer.copy(SendBuffer, Position, Buffer, 0, Size)
+				table.move(Instances, 1, #Instances, #SendInstances + 1, SendInstances)
+				PlayersMap[Player] = Save()
+			end
+		end,
+		FireList = function(List: {Player}, Value: string): ()
+			Load()
+			WriteEVENT_SignalResetDirtyGroup(Value)
+			local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
+			for _, Player in List do
+				Load(PlayersMap[Player])
+				local Position = Allocate(Size)
+				buffer.copy(SendBuffer, Position, Buffer, 0, Size)
+				table.move(Instances, 1, #Instances, #SendInstances + 1, SendInstances)
+				PlayersMap[Player] = Save()
+			end
+		end,
+		FireExcept = function(Except: Player, Value: string): ()
+			Load()
+			WriteEVENT_SignalResetDirtyGroup(Value)
 			local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
 			for _, Player in Players:GetPlayers() do
 				if Player == Except then
@@ -3998,15 +4057,15 @@ local Returns = table.freeze({
 	},
 	CreateDirtyGroupsFromClient = {
 		On = function(Listener: (Player: Player, Value: {[string]: Part}) -> ()): () -> ()
-			table.insert(Events.Reliable[4], Listener)
-			for Index, Arguments in Queue.Reliable[4] do
+			table.insert(Events.Reliable[5], Listener)
+			for Index, Arguments in Queue.Reliable[5] do
 				task.spawn(Listener, table.unpack(Arguments))
 			end
-			Queue.Reliable[4] = {}
+			Queue.Reliable[5] = {}
 			return function (): ()
-				local Index = table.find(Events.Reliable[4], Listener)
+				local Index = table.find(Events.Reliable[5], Listener)
 				if Index ~= nil then
-					table.remove(Events.Reliable[4], Index)
+					table.remove(Events.Reliable[5], Index)
 				end
 			end
 		end
@@ -4151,29 +4210,29 @@ local Returns = table.freeze({
 	},
 	ClientInitComplete = {
 		On = function(Listener: (Player: Player, Value: nil) -> ()): () -> ()
-			Events.Reliable[8] = Listener
-			for Index, Arguments in Queue.Reliable[8] do
+			Events.Reliable[9] = Listener
+			for Index, Arguments in Queue.Reliable[9] do
 				task.spawn(Listener, table.unpack(Arguments))
 			end
-			Queue.Reliable[8] = {}
+			Queue.Reliable[9] = {}
 			return function (): ()
-				if Events.Reliable[8] == Listener then
-					Events.Reliable[8] = nil
+				if Events.Reliable[9] == Listener then
+					Events.Reliable[9] = nil
 				end
 			end
 		end
 	},
 	ClientRecievedMapParts = {
 		On = function(Listener: (Player: Player, Value: string) -> ()): () -> ()
-			table.insert(Events.Reliable[9], Listener)
-			for Index, Arguments in Queue.Reliable[9] do
+			table.insert(Events.Reliable[10], Listener)
+			for Index, Arguments in Queue.Reliable[10] do
 				task.spawn(Listener, table.unpack(Arguments))
 			end
-			Queue.Reliable[9] = {}
+			Queue.Reliable[10] = {}
 			return function (): ()
-				local Index = table.find(Events.Reliable[9], Listener)
+				local Index = table.find(Events.Reliable[10], Listener)
 				if Index ~= nil then
-					table.remove(Events.Reliable[9], Index)
+					table.remove(Events.Reliable[10], Index)
 				end
 			end
 		end

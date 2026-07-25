@@ -93,6 +93,7 @@ local function ReplicateDestructionToClients(destructionType : DestructionTypes,
 	local serialNewDirtyGroups = {}
 	for DirtyGroupID in pairs(createdDirtyGroups) do
 		local dirtyGroupData = State.DirtyGroupData[DirtyGroupID]
+		if dirtyGroupData.OriginalPart:HasTag(Settings.BLOCK_CLIENT_SERVER_TAG) then continue end
 		serialNewDirtyGroups[DirtyGroupID] = {
 			OriginalPart = PartOperations.SerializedPartInstance(State.DirtyGroupData[DirtyGroupID].OriginalPart),
 			GridLength = dirtyGroupData.GridLength,
@@ -172,7 +173,7 @@ local function ReplicateStateToPlayer(plr)
 	for DirtyGroupID, groupData in pairs(State.DirtyGroupData) do
 		local OriginalPart = groupData.OriginalPart
 
-		if OriginalPart:IsA("Part") and OriginalPart.Shape == Enum.PartType.Block then
+		if OriginalPart:IsA("Part") and OriginalPart.Shape == Enum.PartType.Block and not OriginalPart:HasTag(Settings.BLOCK_CLIENT_SERVER_TAG) then
 			-- only send the original part because OriginalParent doesn't matter in this case and GridSize can be derived
 			serialDirtyGroupData[DirtyGroupID] = {
 				OriginalPart = PartOperations.SerializedPartInstance(OriginalPart),

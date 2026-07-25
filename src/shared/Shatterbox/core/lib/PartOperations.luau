@@ -53,7 +53,6 @@ function PartOperations.PartFromTemplate(template : BasePart, cframe : CFrame, C
 	prop = template.Size
     if prop ~= part.Size then part.Size = prop end
 
-	--
 	--part.Color = Color3.fromHSV(math.random(), 1, 1)
 	prop = template.Color
     if prop ~= part.Color then part.Color = prop end

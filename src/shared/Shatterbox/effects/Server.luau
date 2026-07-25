@@ -1,3 +1,6 @@
+--!native
+--!optimize 2
+
 --#selene: allow(unused_variable)
 --#selene: allow(multiple_statements)
 --#selene: allow(incorrect_standard_library_use)
@@ -50,7 +53,7 @@ ServerEffects.MappingVoxelSpace = function(voxel, info)
     local NormalDistThreshold = 0.33
 
     if NormalDist < NormalDistThreshold then
-        voxel:Destroy()
+        Shatterbox.Cleanup(voxel)
         return
     end
 

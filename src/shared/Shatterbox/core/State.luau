@@ -89,8 +89,7 @@ State.CachedParts = CachedParts
 	 * OriginalParent is the original parent of the OriginalPart before any destruction took place. This is used in the client-server algorithm
 	 * GridSize is the GridSize attribute of the OriginalPart if it has one supplied
 ]]
-local DirtyGroupData = {}
-State.DirtyGroupData = DirtyGroupData :: {
+State.DirtyGroupData = {} :: {
 	[string] : {
 		OriginalPart : Part,
 		OriginalParent : Instance,
@@ -99,28 +98,25 @@ State.DirtyGroupData = DirtyGroupData :: {
 }
 
 -- Contains dynamic maps of dirty group members indexed with DirtyGroupID
-local DirtyGroupMembers = {}
-State.DirtyGroupMembers = DirtyGroupMembers :: { [string] : { [Part] : boolean } }
-
+State.DirtyGroupMembers = {} :: { [string] : { [Part] : boolean } }
 
 -- Smooth cleanup map [DirtyGroupID] : secondsUntilCleanup
-local SmoothCleanupQueue = {}
-State.SmoothCleanupQueue = SmoothCleanupQueue :: { [string] : number }
+State.SmoothCleanupQueue = {} :: { [string] : number }
+
+-- Smooth clenaup map for falling groups [FallingGroupID] : secondsUntilCleanup
+State.SmoothCleanupFallingQueue = {} :: { [string] : number }
+
+-- Delayed cleanup map [Part] : secondsUntilCleanup
+State.DelayedCleanupQueue = {}
 
 
-local GreedyMeshedImaginaryParts = {}
-State.GreedyMeshedImaginaryParts = GreedyMeshedImaginaryParts :: { Types.ImaginaryBox }
-
-local ImaginaryCreateQueue = {}
-State.ImaginaryCreateQueue = ImaginaryCreateQueue :: { Types.ImaginaryBox }
-
-local ImaginaryDestroyQueue = {}
-State.ImaginaryDestroyQueue = ImaginaryDestroyQueue :: { [Part] : boolean }
+State.GreedyMeshedImaginaryParts = {} :: { Types.ImaginaryBox }
+State.ImaginaryCreateQueue = {} :: { Types.ImaginaryBox }
+State.ImaginaryDestroyQueue = {} :: { [Part] : boolean }
 
 
 -- Ongoing operations array
-local ShatterQueue = {}
-State.ShatterQueue = ShatterQueue :: { Types.DestructionParams }
+State.ShatterQueue = {} :: { Types.DestructionParams }
 
 
 -- Elements of the Puppets array are of the form {Part, boolean} where the Part is the puppet master/slave (server side master, client side slave) and the boolean is whether or not that puppet is getting interpolated.
@@ -145,10 +141,31 @@ State.PuppetTimeAccumulation = 0
 State.FakePuppetOverrideIndex = 1
 
 
-local ChangedDirtyGroups = {}
-State.ChangedDirtyGroups = ChangedDirtyGroups
+-- [DirtyGroupID] : boolean
+State.ChangedDirtyGroups = {} :: { [string] : boolean }
 
-State.FallingGroupSectionAnchors = {} :: { Part }
+-- [FallingGroupSectionID] : boolean
+State.ChangedFallingGroupSections = {} :: { [string] : boolean }
+
+-- [DirtyGroupID] : CFrame
+State.FallingDirtyGroupOriginalCFrames = {} :: { [string] : CFrame }
+
+-- [FallingGroupID] : CFrame
+State.FallingGroupOriginalAnchorCFrames = {} :: { [string] : CFrame }
+
+-- [DirtyGroupID] : CFrame
+State.FallingDirtyGroupMinCornerLocalToAnchor = {} :: { [string] : CFrame }
+
+-- [FallingGroupID] : { [FallingGroupSectionID] : Part }
+State.FallingGroupSectionAnchors = {} :: { [string] : { [string] : Part } }
+
+-- [FallingGroupID] : { [FallingGroupSectionID] : { [BasePart] : boolean } }
+State.FallingGroupSectionMembers = {} :: { [string] : { [string] : { [BasePart] : boolean } } }
+
+-- [FallingGroupID] : { [DirtyGroupID] : boolean }
+State.FallingGroupDirtyGroups = {} :: { [string] : { [string] : boolean } }
+
+State.FallingGroupPartWeldMap = {} :: { [BasePart] : Weld }
 
 
 local PreAllocated = {}
@@ -173,6 +190,9 @@ State.ClientInitComplete = false
 
 -- boolean used to determine whether or not to update the cache (I have modified ObjectCache to manually do these calls)
 State.ScheduledUpdate = false
+
+-- boolean used to ensure a new ShatterboxHeartbeatCycle doesn't start before an old one can finish
+State.IsProcessing = false
 
 
 

@@ -1,7 +1,7 @@
 --!native
 --!optimize 2
 
--- Shatterbox dev build May 12, 2026
+-- Shatterbox dev build July 25, 2026
 
 --#selene: allow(incorrect_standard_library_use)
 
@@ -24,6 +24,7 @@ local VertexMath = require(lib:WaitForChild("VertexMath"))
 local GetVerts, GetNormals = VertexMath.GetVerts, VertexMath.GetNormals
 
 local DirtyGroupLogic = require(components:WaitForChild("DirtyGroupLogic"))
+local FallingGroupLogic = require(components:WaitForChild("FallingGroupLogic"))
 local ShatterQueueLogic = require(components:WaitForChild("ShatterQueueLogic"))
 local DeferredInstantiationLogic = require(components:WaitForChild("DeferredInstantiationLogic"))
 local ClientServerLogic = require(components:WaitForChild("ClientServerLogic"))
@@ -34,10 +35,11 @@ local Blink = State.Blink
 
 
 local function ShatterboxHeartbeatCycle(deltaTime)
+	if State.IsProcessing then return end
+	State.IsProcessing = true
 
-	if Settings.UseSmoothCleanup then
-		coroutine.wrap(DirtyGroupLogic.SmoothCleanupHeartbeat)(deltaTime)
-	end
+	-- Smooth cleanup queue and delayed cleanup queue are processed here.
+	DirtyGroupLogic.Heartbeat(deltaTime)
 
 	-- All queued destructions for this frame (from Shatterbox.Destroy) are processed here, without modifying or creating any map parts (only voxel debris are instantiated/destroyed).
 	ShatterQueueLogic.Heartbeat()
@@ -45,6 +47,10 @@ local function ShatterboxHeartbeatCycle(deltaTime)
 	-- The state the map should be after all voxel destruction for this frame is now known. The affected dirty groups are Greedy Meshed without modifying or creating any map parts.
 	-- Finally the new map parts are created and the old ones are destroyed (if necessary). This algorithm results in the minimum map part creation/deletion count possible, or as close to it as Greedy Meshing allows.
 	DeferredInstantiationLogic.Heartbeat()
+
+	if isServer then
+		FallingGroupLogic.Heartbeat()
+	end
 
 	-- Client-Server makes each client run their own version of Shatterbox (for recv gains and part flashing mitigation with streaming enabled). This ensures new players have their state synchronized with the server.
 	if #State.NewPlayerStateReplicationQueue > 0 then
@@ -59,7 +65,10 @@ local function ShatterboxHeartbeatCycle(deltaTime)
 		PuppeteerLogic.Heartbeat(deltaTime)
 	end
 
+	table.clear(State.ChangedDirtyGroups)
+
 	Blink.StepReplication()
+	State.IsProcessing = false
 end
 
 
@@ -80,7 +89,10 @@ Shatterbox.Settings = Settings
 
 	It is safe to un-anchor these parts again in your destruction effects to have them start replicating again, they will still anchor themselves when they stop moving.
 
+	@function Puppeteer
+	@param voxel Part
 	@return number
+	@within Shatterbox
 	@server
 ]=]
 Shatterbox.Puppeteer = PuppeteerLogic.Puppeteer
@@ -161,8 +173,10 @@ Shatterbox.Puppets = State.Puppets
 --[=[
 	A function that will wait for a Puppet with a given id to exist in [Shatterbox.Puppets], and return it if it was found.
 
+	@function GetPuppetAsync
 	@param puppetID number
 	@param waitCount number? -- The number of Heartbeats to wait. Defaults to 10.
+	@within Shatterbox
 	@client
 ]=]
 Shatterbox.GetPuppetAsync = PuppeteerLogic.GetPuppetAsync
@@ -242,8 +256,12 @@ end
 	:::tip
 	You would want to pass in `doNotGiveDebrisTag` if you're going to use the static function [Shatterbox.OnVoxelDestruct] to use/extend an existing effect.
 	:::
+
+	@function InstantiateImaginaryVoxel
 	@param ImaginaryVoxel ImaginaryVoxel
 	@param doNotGiveDebrisTag boolean?
+	@return Part
+	@within Shatterbox
 ]=]
 Shatterbox.InstantiateImaginaryVoxel = ShatterQueueLogic.InstantiateImaginaryVoxel
 
@@ -301,7 +319,7 @@ end
 
 
 --[=[
-	Resets all modified parts and re-allocates system queues/maps.
+	Resets all modified parts and clears Shatterbox queues/maps.
 
 	If `doNotRevertOwnership` is `true` with Client-Server enabled, the clients do not delete their owned map parts.
 
@@ -310,11 +328,13 @@ end
 	@within Shatterbox
 ]=]
 function Shatterbox.Reset(doNotRevertOwnership : boolean?, replicated)
-	-- stop all queued destructions
-	table.clear(State.ShatterQueue)
+	table.clear(State.ChangedDirtyGroups)
 
+	table.clear(State.DelayedCleanupQueue)
 	table.clear(State.SmoothCleanupQueue)
+	table.clear(State.SmoothCleanupFallingQueue)
 
+	table.clear(State.ShatterQueue)
 	table.clear(State.ImaginaryCreateQueue)
 	table.clear(State.ImaginaryDestroyQueue)
 	table.clear(State.GreedyMeshedImaginaryParts)
@@ -341,8 +361,15 @@ function Shatterbox.Reset(doNotRevertOwnership : boolean?, replicated)
 	table.clear(State.PuppetsLerpData)
 	State.PuppetNextReplicationIndex = 1
 
+	for _, SectionAnchors in pairs(State.FallingGroupSectionAnchors) do
+		for _, SectionAnchor in pairs(SectionAnchors) do
+			SectionAnchor:Destroy()
+		end
+	end
+	table.clear(State.FallingGroupSectionAnchors)
+	table.clear(State.FallingGroupPartWeldMap)
+
 	if doNotRevertOwnership and Settings.USE_CLIENT_SERVER then
-		-- every operation is undone if the ownership is not meant to be reverted
 		for DirtyGroupID in pairs(State.DirtyGroupData) do
 			DirtyGroupLogic.UndoDirtyGroup(DirtyGroupID)
 		end
@@ -352,19 +379,46 @@ function Shatterbox.Reset(doNotRevertOwnership : boolean?, replicated)
 			if replicated then
 				OriginalPart:Destroy()
 			else
-				-- clear the dirty group information
 				OriginalPart:SetAttribute(Settings.DIRTY_GROUP_ID_ATTRIBUTE_NAME)
-				-- put the original part back where it was before Shatterbox touched it
 				OriginalPart.Parent = groupData.OriginalParent
 			end
-			-- destroy all members of the dirty group
+
 			for member in pairs(State.DirtyGroupMembers[DirtyGroupID]) do
 				DirtyGroupLogic.DestroyPart(member)
+			end
+
+			if not replicated and OriginalPart:GetAttribute(Settings.FALLING_GROUP_ID_ATTRIBUTE_NAME) then
+				OriginalPart:SetAttribute(Settings.FALLING_GROUP_ID_ATTRIBUTE_NAME)
+				OriginalPart:SetAttribute(Settings.FALLING_GROUP_SECTION_ID_ATTRIBUTE_NAME)
+				OriginalPart.CFrame = State.FallingDirtyGroupOriginalCFrames[DirtyGroupID]
+				OriginalPart.Anchored = true
 			end
 		end
 
 		table.clear(State.DirtyGroupData)
 		table.clear(State.DirtyGroupMembers)
+
+		table.clear(State.FallingGroupDirtyGroups)
+		table.clear(State.FallingDirtyGroupMinCornerLocalToAnchor)
+		table.clear(State.FallingDirtyGroupOriginalCFrames)
+		table.clear(State.FallingGroupOriginalAnchorCFrames)
+	end
+
+	table.clear(State.FallingGroupSectionMembers)
+end
+
+--[=[
+	Resets the given dirty group to the state it was in before Shatterbox touched it.
+
+	:::tip
+	Use `part:GetAttribute("DirtyGroupID")` to get the DirtyGroupID of a part that is a member of a dirty group.
+	:::
+]=]
+function Shatterbox.ResetDirtyGroup(DirtyGroupID : string)
+	DirtyGroupLogic.ResetDirtyGroup(DirtyGroupID)
+
+	if Settings.USE_CLIENT_SERVER and isServer then
+		Blink.SignalResetDirtyGroup.FireAll(DirtyGroupID)
 	end
 end
 
@@ -480,12 +534,27 @@ end
 	Properly returns a tuple of parts to the cache if ObjectCache is enabled. Parts not from the cache or if ObjectCache is disabled are directly destroyed.
 
 	:::danger
-	If you have ObjectCache enabled, you **must** use this function to destroy map parts and voxels created by this library.
+	If you have ObjectCache enabled, you **must** use this function instead of `Instance:Destroy()` to destroy map parts and voxels created by this library.
 	:::
 ]=]
 function Shatterbox.Cleanup(... : BasePart)
 	for _, Part in ipairs({...}) do
 		DirtyGroupLogic.DestroyPart(Part)
+	end
+end
+
+--[=[
+	After a delay, properly returns a tuple of parts to the cache if ObjectCache is enabled. Parts not from the cache or if ObjectCache is disabled are directly destroyed.
+
+	If the part is already present in the ShatterboxDebris map and the new delay is longer than the remaining time, the remaining time is extended to the new delay.
+
+	:::danger
+	If you have ObjectCache enabled, you **must** use this function instead of `game.Debris:AddItem()` to destroy map parts and voxels created by this library.
+	:::
+]=]
+function Shatterbox.DelayedCleanup(delay : number, ... : BasePart)
+	for _, Part in ipairs({...}) do
+		State.DelayedCleanupQueue[Part] = math.max(State.DelayedCleanupQueue[Part] or 0, delay)
 	end
 end
 
@@ -532,6 +601,7 @@ Shatterbox.OnVoxelDestruct = ShatterQueueLogic.HandleOnVoxelDestruct
 	```
 	:::
 
+	@function OnDestructCompleted
 	@param name string
 	@param voxelCount number
 	@param affectedIDs {[string] : boolean}
@@ -627,6 +697,9 @@ elseif isClient then
 	Blink.SignalResetArea.On(function(cframe, size)
 		if Settings.USE_CLIENT_SERVER and not State.ClientInitComplete then return end
 		Shatterbox.ResetArea({ CFrame = cframe, Size = size })
+	end)
+	Blink.SignalResetDirtyGroup.On(function(DirtyGroupID)
+		DirtyGroupLogic.ResetDirtyGroup(DirtyGroupID, true)
 	end)
 
 	Blink.CreatePuppets.On(function(serialPuppets, startIndex)

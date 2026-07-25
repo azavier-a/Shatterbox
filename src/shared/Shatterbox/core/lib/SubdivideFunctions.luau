@@ -69,7 +69,7 @@ end
 
     Maintains grid structure according to the VoxelSize and GroupMinimumCorner supplied.
 ]]
-function SubdivideFunctions.Octree(Part : Types.WorldInfo, PartGridLength : Vector3, VoxelSize : Vector3, GroupMinimumCornerPosition : Vector3, DirtyGroupID : string)
+function SubdivideFunctions.Octree(Part : Types.WorldInfo, PartGridLength : Vector3, VoxelSize : Vector3, GroupMinimumCornerPosition : Vector3)
 	local Axis, i = table.create(3), 1
 	for _, axis in ipairs(axisNameArray) do
 		if PartGridLength[axis] == 1 then continue end
@@ -102,14 +102,16 @@ function SubdivideFunctions.Octree(Part : Types.WorldInfo, PartGridLength : Vect
 				table.insert(tmpParts, {
 					CFrame = cframe - off,
 					Size = newSize,
-					DirtyGroupID = DirtyGroupID,
+					DirtyGroupID = Part.DirtyGroupID,
+					FallingGroupSectionID = Part.FallingGroupSectionID,
 					Verts = false,
 					isEdge = false
 				})
 				table.insert(tmpParts, {
 					CFrame = cframe + off,
 					Size = newSize,
-					DirtyGroupID = DirtyGroupID,
+					DirtyGroupID = Part.DirtyGroupID,
+					FallingGroupSectionID = Part.FallingGroupSectionID,
 					Verts = false,
 					isEdge = false
 				})
@@ -139,14 +141,16 @@ function SubdivideFunctions.Octree(Part : Types.WorldInfo, PartGridLength : Vect
 			table.insert(tmpParts, {
 				CFrame = splitPointCF - splitWorldAxisVector*minSize,
 				Size = minSizeVec,
-				DirtyGroupID = DirtyGroupID,
+				DirtyGroupID = Part.DirtyGroupID,
+				FallingGroupSectionID = Part.FallingGroupSectionID,
 				Verts = false,
 				isEdge = false
 			})
 			table.insert(tmpParts, {
 				CFrame = splitPointCF + splitWorldAxisVector*maxSize,
 				Size = maxSizeVec,
-				DirtyGroupID = DirtyGroupID,
+				DirtyGroupID = Part.DirtyGroupID,
+				FallingGroupSectionID = Part.FallingGroupSectionID,
 				Verts = false,
 				isEdge = false
 			})
@@ -171,7 +175,7 @@ end
 
     Maintains grid structure according to the VoxelSize and GroupMinimumCorner supplied.
 ]]
-function SubdivideFunctions.KD(Part : Types.WorldInfo, PartGridLength : Vector3, VoxelSize : Vector3, GroupMinimumCornerPosition : Vector3, DirtyGroupID : string)
+function SubdivideFunctions.KD(Part : Types.WorldInfo, PartGridLength : Vector3, VoxelSize : Vector3, GroupMinimumCornerPosition : Vector3)
 	local lenX, lenY, lenZ = PartGridLength.X, PartGridLength.Y, PartGridLength.Z
 	local maxSize = math.max(lenX, lenY, lenZ)
 	local axis = (lenX == maxSize and "X") or (lenY == maxSize and "Y") or "Z"
@@ -193,14 +197,16 @@ function SubdivideFunctions.KD(Part : Types.WorldInfo, PartGridLength : Vector3,
 		createdParts[1] = {
 			CFrame = PartCFrame - off,
 			Size = newSize,
-			DirtyGroupID = DirtyGroupID,
+			DirtyGroupID = Part.DirtyGroupID,
+			FallingGroupSectionID = Part.FallingGroupSectionID,
 			Verts = false,
 			isEdge = false
 		}
 		createdParts[2] = {
 			CFrame = PartCFrame + off,
 			Size = newSize,
-			DirtyGroupID = DirtyGroupID,
+			DirtyGroupID = Part.DirtyGroupID,
+			FallingGroupSectionID = Part.FallingGroupSectionID,
 			Verts = false,
 			isEdge = false
 		}
@@ -231,14 +237,16 @@ function SubdivideFunctions.KD(Part : Types.WorldInfo, PartGridLength : Vector3,
 	createdParts[1] = {
 		CFrame = splitPointCF - splitWorldAxisVector*minSize,
 		Size = minSizeVec,
-		DirtyGroupID = DirtyGroupID,
+		DirtyGroupID = Part.DirtyGroupID,
+		FallingGroupSectionID = Part.FallingGroupSectionID,
 		Verts = false,
 		isEdge = false
 	}
 	createdParts[2] = {
 		CFrame = splitPointCF + splitWorldAxisVector*maxSize,
 		Size = maxSizeVec,
-		DirtyGroupID = DirtyGroupID,
+		DirtyGroupID = Part.DirtyGroupID,
+		FallingGroupSectionID = Part.FallingGroupSectionID,
 		Verts = false,
 		isEdge = false
 	}

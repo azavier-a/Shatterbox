@@ -100,17 +100,17 @@ function DeferredInstantiationLogic.Heartbeat()
 					table.move(ImaginaryParts, 1, #ImaginaryParts, #State.GreedyMeshedImaginaryParts + 1, State.GreedyMeshedImaginaryParts)
 					continue
 				end
-				GreedyMeshLogic.GreedyMesh(DirtyGroupID, ImaginaryParts)
+				GreedyMeshLogic.GreedyMeshDirtyGroup(DirtyGroupID, ImaginaryParts)
 			end
 
 			for _, toCreate in ipairs(State.GreedyMeshedImaginaryParts) do
-				DirtyGroupLogic.InstantiatePart(toCreate.DirtyGroupID, toCreate.CFrame, toCreate.Size)
+				DirtyGroupLogic.InstantiatePart(toCreate.DirtyGroupID, toCreate.CFrame, toCreate.Size, toCreate.FallingGroupSectionID)
 			end
 
 			table.clear(State.GreedyMeshedImaginaryParts)
 		else
 			for _, toCreate in ipairs(State.ImaginaryCreateQueue) do
-				DirtyGroupLogic.InstantiatePart(toCreate.DirtyGroupID, toCreate.CFrame, toCreate.Size)
+				DirtyGroupLogic.InstantiatePart(toCreate.DirtyGroupID, toCreate.CFrame, toCreate.Size, toCreate.FallingGroupSectionID)
 			end
 		end
 

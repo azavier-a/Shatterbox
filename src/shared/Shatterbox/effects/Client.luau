@@ -1,3 +1,6 @@
+--!native
+--!optimize 2
+
 --#selene: allow(unused_variable)
 --#selene: allow(multiple_statements)
 
@@ -27,7 +30,7 @@ end
 ClientEffects.Rough = function(voxel, info : Types.DestroyedVoxelInfo)
 
     if info.IsAlreadyDebris then -- the voxel is already debris
-        if not info.IsEdge then voxel:Destroy() end -- fully contained debris is destroyed
+        if not info.IsEdge then Shatterbox.Cleanup(voxel) end -- fully contained debris is destroyed
         return
     end
 
@@ -39,7 +42,7 @@ ClientEffects.Rough = function(voxel, info : Types.DestroyedVoxelInfo)
         return
     end
 
-    if roll > 0.05 then voxel:Destroy() return end -- a small percentage of voxels are destroyed
+    if roll > 0.05 then Shatterbox.Cleanup(voxel) return end -- a small percentage of voxels are destroyed
 
     -- all other voxels are flying debris
 
@@ -49,7 +52,7 @@ ClientEffects.Rough = function(voxel, info : Types.DestroyedVoxelInfo)
     voxel.AssemblyAngularVelocity = (Vector3.new(math.random(), math.random(), math.random()) - Vector3.one * 0.5) * 20
 
     -- remember to destroy the voxel
-    game.Debris:AddItem(voxel, 3)
+    Shatterbox.DelayedCleanup(3, voxel)
 end
 
 

@@ -176,6 +176,7 @@ end
 
 
 function PuppeteerLogic.DestroyPuppet(index)
+	if not State.Puppets[index] then return end
 	DirtyGroupLogic.DestroyPart(State.Puppets[index][1])
 	State.Puppets[index] = nil
 	State.PuppetsLerpData[index] = nil

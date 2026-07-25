@@ -15,6 +15,7 @@ local lib = core:WaitForChild("lib")
 local Settings = require(src:WaitForChild("Settings"))
 local Types = require(src:WaitForChild("Types"))
 
+local Serializer = require(lib:WaitForChild("Serializer"))
 local SubdivideFunctions = require(lib:WaitForChild("SubdivideFunctions"))
 local VertexMath = require(lib:WaitForChild("VertexMath"))
 local GetVerts, GetNormals = VertexMath.GetVerts, VertexMath.GetNormals
@@ -42,7 +43,7 @@ local function ShouldSkipInstance(i : Instance)
 	-- skip anything that passed the SkipInstanceCheck
 	if Settings.SkipInstanceCheck(i) then return true end
 	-- skip anything that isnt a block part
-	if isClient and (not i:IsA("Part") or i.Shape ~= Enum.PartType.Block) then return true end
+	if isClient and (not i:IsA("Part") or i.Shape ~= Enum.PartType.Block or i:HasTag(Settings.BLOCK_CLIENT_SERVER_TAG)) then return true end
 	-- skip anything with the "Indestructible" tag
 	if i:HasTag(Settings.INDESTRUCTIBLE_TAG) then return true end
 	-- skip anything which has a Humanoid child, or if any of its ancestors have a Humanoid child.
@@ -53,6 +54,8 @@ end
 
 
 local ShatterQueueLogic = {}
+ShatterQueueLogic.FindHumanoidAsAncestorChild = FindHumanoidAsAncestorChild
+ShatterQueueLogic.ShouldSkipInstance = ShouldSkipInstance
 
 
 -- What happens when a model is passed in as the `CuttingPart`
@@ -92,51 +95,65 @@ local function MarkDirty(Part : Part, destructionParams : Types.InternalImaginar
 
 	if Part:HasTag(Settings.DEBRIS_TAG) then return CreatedDirtyGroups end
 
-	local PartDirtyGroupID = Part:GetAttribute(Settings.DIRTY_GROUP_ID_ATTRIBUTE_NAME)
-
-	local PartIsDivisible = Part:IsA("Part") and Part.Shape == Enum.PartType.Block
-	local NonDivisibleInteraction = Settings.NonDivisibleInteraction
-
 	local CleanupDelay = destructionParams.CleanupDelay
-	--[[
 
-	local FallingGroupID, CreatedFallingGroupID = Part:GetAttribute(FallingGroupIDAttribute), nil
-	local fallingGroupContainer = FindFirstAncestorGroupWithTag(Part, FallingGroupTag)
+
+	local FallingGroupID = Part:GetAttribute(Settings.FALLING_GROUP_ID_ATTRIBUTE_NAME)
+	local fallingGroupContainer = DirtyGroupLogic.GroupHasTag(Part, Settings.FALLING_GROUP_TAG)
 	if not FallingGroupID and fallingGroupContainer then
-		CreatedFallingGroupID = GetCondensedGUID()
-		FallingGroupID = CreatedFallingGroupID
+		fallingGroupContainer:AddTag(Settings.BLOCK_CLIENT_SERVER_TAG)
+		FallingGroupID = Serializer.GetCondensedGUID()
 
-		local fallingGroupMembers = {}
-		FallingGroupMembers[CreatedFallingGroupID] = fallingGroupMembers
+		local OriginalAnchorCFrame, numBaseParts = Vector3.zero, 0
+		local FallingGroupDirtyGroups = {}
 
 		for _, part in ipairs(fallingGroupContainer:GetDescendants()) do
 			if not part:IsA("BasePart") then continue end
 
-			local DirtyGroupID = DirtyGroupLogic.PopulateDirtyGroup(part, nil)
-			part:SetAttribute(FallingGroupIDAttribute, CreatedFallingGroupID)
+			local DirtyGroupID = DirtyGroupLogic.PopulateDirtyGroup(part)
+			part:SetAttribute(Settings.FALLING_GROUP_ID_ATTRIBUTE_NAME, FallingGroupID)
 
-			if part:IsA("Part") and part.Shape == Enum.PartType.Block then CreatedDirtyGroups[DirtyGroupID] = true end
+			State.FallingDirtyGroupOriginalCFrames[DirtyGroupID] = part.CFrame
+			FallingGroupDirtyGroups[DirtyGroupID] = true
 
-			part.Parent = nil
-
-			DirtyGroupLogic.InstantiatePart(DirtyGroupID, part.CFrame, part.Size)
-
-			fallingGroupMembers[DirtyGroupID] = true
+			OriginalAnchorCFrame += part.Position
+			numBaseParts += 1
 		end
+		State.FallingGroupDirtyGroups[FallingGroupID] = FallingGroupDirtyGroups
+
+		OriginalAnchorCFrame /= numBaseParts
+		OriginalAnchorCFrame = CFrame.new(OriginalAnchorCFrame)
+
+		for DirtyGroupID in pairs(FallingGroupDirtyGroups) do
+			local OriginalPart = State.DirtyGroupData[DirtyGroupID].OriginalPart
+			State.FallingDirtyGroupMinCornerLocalToAnchor[DirtyGroupID] = OriginalAnchorCFrame:ToObjectSpace(OriginalPart.CFrame:ToWorldSpace(CFrame.new(-OriginalPart.Size*0.5)))
+		end
+
+		State.FallingGroupOriginalAnchorCFrames[FallingGroupID] = OriginalAnchorCFrame
+		State.FallingGroupSectionAnchors[FallingGroupID] = {}
+		State.FallingGroupSectionMembers[FallingGroupID] = {}
 	end
+
+	local PartDirtyGroupID = Part:GetAttribute(Settings.DIRTY_GROUP_ID_ATTRIBUTE_NAME)
 
 	if FallingGroupID then
 		if Settings.UseSmoothCleanup and CleanupDelay > 0 then
-			for DirtyGroupID in pairs(FallingGroupMembers[FallingGroupID]) do
-				local prev = State.SmoothCleanupQueue[DirtyGroupID]
-				State.SmoothCleanupQueue[DirtyGroupID] = prev and math.max(prev, CleanupDelay) or CleanupDelay
-			end
+			local prev = State.SmoothCleanupFallingQueue[FallingGroupID]
+			State.SmoothCleanupFallingQueue[FallingGroupID] = prev and math.max(prev, CleanupDelay) or CleanupDelay
 		end
 
-		return CreatedDirtyGroups, CreatedFallingGroupID
-	end
-	--]]
+		State.ChangedDirtyGroups[PartDirtyGroupID] = true
 
+		local FallingGroupSectionID = Part:GetAttribute(Settings.FALLING_GROUP_SECTION_ID_ATTRIBUTE_NAME)
+		if FallingGroupSectionID then
+			State.ChangedFallingGroupSections[FallingGroupSectionID] = true
+		end
+
+		return CreatedDirtyGroups
+	end
+
+	local PartIsDivisible = Part:IsA("Part") and Part.Shape == Enum.PartType.Block
+	local NonDivisibleInteraction = Settings.NonDivisibleInteraction
 
 	if not PartDirtyGroupID and (PartIsDivisible or NonDivisibleInteraction ~= "NONE") then
 		PartDirtyGroupID = DirtyGroupLogic.PopulateDirtyGroup(Part)
@@ -154,6 +171,8 @@ local function MarkDirty(Part : Part, destructionParams : Types.InternalImaginar
 				cloned.Anchored = false
 			end
 		end
+
+		State.ChangedDirtyGroups[PartDirtyGroupID] = true
 	end
 
 	if Settings.UseSmoothCleanup and CleanupDelay > 0 then
@@ -183,9 +202,7 @@ local function GetDestructibleParts(destructionParams : Types.InternalImaginaryP
 
 	local AffectedDirtyGroups = {}
 
-	--debug.profilebegin("GetPartsInPart nil Parent")
 	local FoundPartsInPart = workspace:GetPartsInPart(IntersectingPart, destructionParams.FilterTagged and State.OverlapParamsOfTagged(destructionParams.FilterTagged))
-	--debug.profileend()
 
 	for _, part in ipairs( FoundPartsInPart ) do
 		if State.ImaginaryDestroyQueue[part] then continue end
@@ -253,20 +270,18 @@ local function ImaginaryVoxels(params, destructibleParts, dirtyGroups)
 			Size = part.Size,
 
 			DirtyGroupID = part:GetAttribute(Settings.DIRTY_GROUP_ID_ATTRIBUTE_NAME),
+			FallingGroupSectionID = part:GetAttribute(Settings.FALLING_GROUP_SECTION_ID_ATTRIBUTE_NAME)
 		})
 	end
 
-	local cuttingPart = params.CuttingPart
-	local cpcf, cps, cpsh = cuttingPart.CFrame, cuttingPart.Size, cuttingPart.Shape.Name
-	local iBl, iBa, iC = cpsh == "Block", cpsh == "Ball", cpsh == "Cylinder"
-
+	local cuttingPartCFrame, cuttingPartSize, cuttingPartShapeName = params.CuttingPart.CFrame, params.CuttingPart.Size, params.CuttingPart.Shape.Name
 	local intersectingVerts, intersectingNormals
-	if iBl or iC then
-		intersectingVerts = GetVerts.Block(cpcf, cps)
-		intersectingNormals = GetNormals.Block(cpcf)
-	elseif not iBa then
-		intersectingVerts = GetVerts[cpsh](cpcf, cps)
-		intersectingNormals = GetNormals[cpsh](cpcf, cps)
+	if cuttingPartShapeName == "Block" or cuttingPartShapeName == "Cylinder" then
+		intersectingVerts = GetVerts.Block(cuttingPartCFrame, cuttingPartSize)
+		intersectingNormals = GetNormals.Block(cuttingPartCFrame)
+	elseif cuttingPartShapeName ~= "Ball" then
+		intersectingVerts = GetVerts[cuttingPartShapeName](cuttingPartCFrame, cuttingPartSize)
+		intersectingNormals = GetNormals[cuttingPartShapeName](cuttingPartCFrame, cuttingPartSize)
 	end
 
 	if #State.ImaginaryCreateQueue > 0 then
@@ -276,19 +291,19 @@ local function ImaginaryVoxels(params, destructibleParts, dirtyGroups)
         end
 	end
 
-	--debug.profileend()
-
 	if #partsInPart == 0 then return nil, existingDebris, AffectedDirtyGroups end
 
 	local toUseVoxelSize : { [string] : Vector3 }
 	-- Handle active VoxelSize switching for the affected dirty groups
-	local desiredGridSize = params.GridSize
-	if desiredGridSize then
+	if params.GridSize then
 		toUseVoxelSize = {}
 		for DirtyGroupID in pairs(AffectedDirtyGroups) do
 			local dirtyGroupData = State.DirtyGroupData[DirtyGroupID]
 			local OriginalPartSize = dirtyGroupData.OriginalPart.Size
-			local roundedGridLength = DirtyGroupLogic.RoundAxisNearestPowerOf2(Vector3.one:Max(OriginalPartSize // desiredGridSize))
+			local roundedGridLength = Vector3.one:Max(OriginalPartSize // params.GridSize)
+			if Settings.StrictGrid then
+				roundedGridLength = DirtyGroupLogic.RoundAxisNearestPowerOf2(roundedGridLength)
+			end
 
 			dirtyGroupData.MaxGridLength = roundedGridLength:Max(dirtyGroupData.MaxGridLength)
 
@@ -307,14 +322,12 @@ local function ImaginaryVoxels(params, destructibleParts, dirtyGroups)
 
 		local verts = toDivide.Verts or GetVerts.Block(toDivide.CFrame, toDivide.Size)
 
-		local s : Vector3, DirtyGroupID : string = toDivide.Size, toDivide.DirtyGroupID
-		local dirtyGroupData = State.DirtyGroupData[DirtyGroupID]
-		local VoxelSize = toUseVoxelSize and toUseVoxelSize[DirtyGroupID] or dirtyGroupData.VoxelSize
+		local VoxelSize = toUseVoxelSize and toUseVoxelSize[toDivide.DirtyGroupID] or State.DirtyGroupData[toDivide.DirtyGroupID].VoxelSize
 
-		local partGridLength = (s/VoxelSize + EPSILON_VECTOR):Floor():Max(Vector3.one)
+		local partGridLength = (toDivide.Size/VoxelSize + EPSILON_VECTOR):Floor():Max(Vector3.one)
 		local toDivideVoxelContributions = partGridLength.X*partGridLength.Y*partGridLength.Z
 
-		local encapsulated, intersected = VertexMath.PartContainsAllVerts(cuttingPart, verts)
+		local encapsulated, intersected = VertexMath.PartContainsAllVerts(params.CuttingPart, verts)
 		-- if toDivide is encapsulated within CuttingPart, there is no need to run expensive division algorithm (just voxelize directly or destroy it)
 		if encapsulated then
 			voxelCount += toDivideVoxelContributions
@@ -327,7 +340,8 @@ local function ImaginaryVoxels(params, destructibleParts, dirtyGroups)
 
 			local newVoxels = SubdivideFunctions.ImaginaryVoxelize(toDivide, VoxelSize, partGridLength)
 			for _, created in ipairs(newVoxels) do
-                created.DirtyGroupID = DirtyGroupID
+                created.DirtyGroupID = toDivide.DirtyGroupID
+				created.FallingGroupSectionID = toDivide.FallingGroupSectionID
             end
 			table.move(newVoxels, 1, #newVoxels, #voxels + 1, voxels)
 
@@ -335,10 +349,10 @@ local function ImaginaryVoxels(params, destructibleParts, dirtyGroups)
 		end
 
 		if not intersected then
-			if iBa then
-				intersected = VertexMath.BallIntersectsBlock(cpcf, cps, toDivide.CFrame, toDivide.Size)
-			elseif iC then
-				intersected = VertexMath.CylinderIntersectsBlock(cpcf, cps, intersectingVerts, intersectingNormals, toDivide.CFrame, toDivide.Size, verts, GetNormals.Block(toDivide.CFrame))
+			if cuttingPartShapeName == "Ball" then
+				intersected = VertexMath.BallIntersectsBlock(cuttingPartCFrame, cuttingPartSize, toDivide.CFrame, toDivide.Size)
+			elseif cuttingPartShapeName == "Cylinder" then
+				intersected = VertexMath.CylinderIntersectsBlock(cuttingPartCFrame, cuttingPartSize, intersectingVerts, intersectingNormals, toDivide.CFrame, toDivide.Size, verts, GetNormals.Block(toDivide.CFrame))
 			else
 				intersected = VertexMath.SAT(intersectingVerts, intersectingNormals, verts, GetNormals.Block(toDivide.CFrame))
 			end
@@ -364,11 +378,17 @@ local function ImaginaryVoxels(params, destructibleParts, dirtyGroups)
 				end
 			end
 
-			local OriginalPart = dirtyGroupData.OriginalPart
+			local OriginalPart = State.DirtyGroupData[toDivide.DirtyGroupID].OriginalPart
 
             local SubdivideFunc = (maxSize < 2*secondMax) and SubdivideFunctions.Octree or SubdivideFunctions.KD
 
-			local createdParts = SubdivideFunc(toDivide, partGridLength, VoxelSize, OriginalPart.CFrame:PointToWorldSpace(-OriginalPart.Size*0.5), DirtyGroupID)
+			local MinToUse =
+				if toDivide.FallingGroupSectionID then
+					State.FallingGroupSectionAnchors[OriginalPart:GetAttribute(Settings.FALLING_GROUP_ID_ATTRIBUTE_NAME)][toDivide.FallingGroupSectionID].CFrame:ToWorldSpace(State.FallingDirtyGroupMinCornerLocalToAnchor[toDivide.DirtyGroupID]).Position
+				else
+					OriginalPart.CFrame:PointToWorldSpace(-OriginalPart.Size*0.5)
+
+			local createdParts = SubdivideFunc(toDivide, partGridLength, VoxelSize, MinToUse)
 			table.move(createdParts, 1, #createdParts, #dividing + 1, dividing)
 		else
 			-- if the toDivide part is not intersecting the CuttingPart, it is a static part
@@ -399,7 +419,7 @@ local function InstantiateImaginaryVoxel(ImaginaryVoxel : Types.ImaginaryVoxel |
 
 	local DirtyGroupID = ImaginaryVoxel.DirtyGroupID
 
-	local voxel = DirtyGroupLogic.InstantiatePart(DirtyGroupID, ImaginaryVoxel.CFrame, ImaginaryVoxel.Size, true)
+	local voxel = DirtyGroupLogic.InstantiatePart(DirtyGroupID, ImaginaryVoxel.CFrame, ImaginaryVoxel.Size, nil, true)
 
 	if not doNotGiveDebrisTag then
         voxel:AddTag(Settings.DEBRIS_TAG)

@@ -5,17 +5,15 @@
 
 local core = script.Parent.Parent
 local src = core.Parent
-local lib = core:WaitForChild("lib")
 
 local Settings = require(src:WaitForChild("Settings"))
 local Types = require(src:WaitForChild("Types"))
 
-local SubdivideFunctions = require(lib:WaitForChild("SubdivideFunctions"))
-
 local State = require(core:WaitForChild("State"))
 
 
-local EPSILON_VECTOR = Vector3.one * 1e-3
+local EPSILON = 1e-3
+local EPSILON_VECTOR = Vector3.one * EPSILON
 local MAXU32 = 0xFFFFFFFF
 
 
@@ -66,67 +64,23 @@ end
 
 
 
-function GreedyMeshLogic.GreedyMesh(DirtyGroupID : string, ImaginaryParts : { Types.ImaginaryBox })
+local function BinaryGreedyMesh(GMState, count, DirtyGroupID, groupMinCornerCFrame, FallingGroupSectionID)
+
 	local dirtyGroupData = State.DirtyGroupData[DirtyGroupID]
-	local dirtyGroupMembers = State.DirtyGroupMembers[DirtyGroupID]
 
-	local Original = dirtyGroupData.OriginalPart
-
+	local VoxelSize = dirtyGroupData.VoxelSize
 	local GridLength = dirtyGroupData.MaxGridLength
 	local DIMX, DIMY, DIMZ = GridLength.X, GridLength.Y, GridLength.Z
 
-	local VoxelSize = Original.Size / GridLength
-
-	-- The bounding area of Greedy Meshing, defined by the original part before it was ever destroyed
-	local OriginalCFrame = Original.CFrame
-	local groupMin = SubdivideFunctions.ExtentInfo(OriginalCFrame, VoxelSize, GridLength)
-	local halfSize = Original.Size * 0.5
-	local groupMinCornerCFrame = OriginalCFrame - (OriginalCFrame.XVector*halfSize.X) - (OriginalCFrame.YVector*halfSize.Y) - (OriginalCFrame.ZVector*halfSize.Z)
+	local groupMinVoxelCFrame = groupMinCornerCFrame:ToWorldSpace(CFrame.new(VoxelSize*0.5))
 	local STATEDIMZ = math.ceil(DIMZ / 32)
 	local DIMYSTATEDIMZ = DIMY*STATEDIMZ
 	local VSX, VSY, VSZ = VoxelSize.X, VoxelSize.Y, VoxelSize.Z
 
-	-- local stateBitCount = DIMX*DIMYDIMZ
-
-	-- flat 3d state array : index = (X - 1)*DIMY*STATE_DIMZ + (Y - 1)*STATE_DIMZ + STATE_Z
-	local GMState = table.create(DIMX*DIMYSTATEDIMZ, 0)
-
-	-- information about the original parts, used for smoothly displaying the output of greedy meshing
-	local OriginalParts = {} :: { Part }
-
-	-- the total number of voxels in the GMState array
-	local count = 0
-
-	for member in pairs(dirtyGroupMembers) do
-		if member:HasTag(Settings.DEBRIS_TAG) then continue end
-
-		table.insert(OriginalParts, member)
-
-		if State.ImaginaryDestroyQueue[member] then continue end
-
-		local n = InitGreedyState(member, VoxelSize, groupMinCornerCFrame, GMState, DIMYSTATEDIMZ, STATEDIMZ)
-		if n then
-			count += n
-			State.ImaginaryDestroyQueue[member] = true
-		end
-	end
-
-	for _, imaginaryMember in ipairs(ImaginaryParts) do
-		local n = InitGreedyState(imaginaryMember, VoxelSize, groupMinCornerCFrame, GMState, DIMYSTATEDIMZ, STATEDIMZ)
-		if n then
-			count += n
-		end
-	end
-
-	if count == 0 then
-		table.move(ImaginaryParts, 1, #ImaginaryParts, #State.GreedyMeshedImaginaryParts + 1, State.GreedyMeshedImaginaryParts)
-		return
-	end
-
-	local meshed = {}
-
 	local searchIndex = 1
 	local StateSize = #GMState
+
+	local meshed = {}
 
 	while count > 0 do
 		while searchIndex <= StateSize and GMState[searchIndex] == 0 do
@@ -255,28 +209,132 @@ function GreedyMeshLogic.GreedyMesh(DirtyGroupID : string, ImaginaryParts : { Ty
 
 		table.insert(meshed, {
 			DirtyGroupID = DirtyGroupID,
-			CFrame = groupMin + groupMin.XVector * VSX * ((StartX + EndX)*0.5 - 1) + groupMin.YVector * VSY * ((StartY + EndY)*0.5 - 1) + groupMin.ZVector * VSZ * ((StartZ + EndZ)*0.5 - 1),
+			FallingGroupSectionID = FallingGroupSectionID,
+			CFrame = groupMinVoxelCFrame + groupMinVoxelCFrame.XVector * VSX * ((StartX + EndX)*0.5 - 1) + groupMinVoxelCFrame.YVector * VSY * ((StartY + EndY)*0.5 - 1) + groupMinVoxelCFrame.ZVector * VSZ * ((StartZ + EndZ)*0.5 - 1),
 			Size = VoxelSize * Vector3.new(NX, NY, NZ)
 		})
 	end
 
+	return meshed
+end
 
-	for _, meshedInfo in ipairs(meshed) do
-		local index, found = nil, nil
-		for i, original in ipairs(OriginalParts) do
-			if original.CFrame:FuzzyEq(meshedInfo.CFrame, 0.001) and original.Size:FuzzyEq(meshedInfo.Size, 0.001) then
-				index, found = i, original
-				break
-			end
-		end
-		if index then
-			table.remove(OriginalParts, index)
-			State.ImaginaryDestroyQueue[found] = nil
-		else
-			table.insert(State.GreedyMeshedImaginaryParts, meshedInfo)
+
+local function GreedyMeshRelativeTo(ExistingParts, ImaginaryParts, groupMinCornerCFrame, DirtyGroupID, FallingGroupSectionID)
+	local dirtyGroupData = State.DirtyGroupData[DirtyGroupID]
+	local VoxelSize = dirtyGroupData.VoxelSize
+
+	-- The bounding area of Greedy Meshing, defined by the original part before it was ever destroyed
+	local STATEDIMZ = math.ceil(dirtyGroupData.MaxGridLength.Z/32)
+	local DIMYSTATEDIMZ = dirtyGroupData.MaxGridLength.Y*STATEDIMZ
+
+	-- flat 3d state array : index = (X - 1)*DIMY*STATE_DIMZ + (Y - 1)*STATE_DIMZ + STATE_Z
+	local GMState = table.create(dirtyGroupData.MaxGridLength.X*DIMYSTATEDIMZ, 0)
+
+	-- information about the original parts, used for smoothly displaying the output of greedy meshing
+	local OriginalParts = {} :: { Part }
+
+	-- the total number of voxels in the GMState array
+	local count = 0
+
+	for member in pairs(ExistingParts) do
+		if member:HasTag(Settings.DEBRIS_TAG) then continue end
+
+		table.insert(OriginalParts, member)
+
+		if State.ImaginaryDestroyQueue[member] then continue end
+
+		local n = InitGreedyState(member, VoxelSize, groupMinCornerCFrame, GMState, DIMYSTATEDIMZ, STATEDIMZ)
+		if n then
+			count += n
+			State.ImaginaryDestroyQueue[member] = true
 		end
 	end
-	--table.move(meshed, 1, #meshed, #State.GreedyMeshedImaginaryParts + 1, State.GreedyMeshedImaginaryParts)
+
+	for _, imaginaryMember in ipairs(ImaginaryParts) do
+		local n = InitGreedyState(imaginaryMember, VoxelSize, groupMinCornerCFrame, GMState, DIMYSTATEDIMZ, STATEDIMZ)
+		if n then
+			count += n
+		end
+	end
+
+	if count == 0 then
+		table.move(ImaginaryParts, 1, #ImaginaryParts, #State.GreedyMeshedImaginaryParts + 1, State.GreedyMeshedImaginaryParts)
+		return
+	end
+
+	for _, MeshedSpan in ipairs(BinaryGreedyMesh(GMState, count, DirtyGroupID, groupMinCornerCFrame, FallingGroupSectionID)) do
+		local index, found = nil, nil
+		for i, original in ipairs(OriginalParts) do
+			if not original.CFrame:FuzzyEq(MeshedSpan.CFrame, EPSILON) or not original.Size:FuzzyEq(MeshedSpan.Size, EPSILON) then continue end
+			index, found = i, original
+		end
+		if not index then
+			table.insert(State.GreedyMeshedImaginaryParts, MeshedSpan)
+			continue
+		end
+
+		OriginalParts[index] = OriginalParts[#OriginalParts]
+		OriginalParts[#OriginalParts] = nil
+		State.ImaginaryDestroyQueue[found] = nil
+	end
+end
+
+
+
+function GreedyMeshLogic.GreedyMeshDirtyGroup(DirtyGroupID : string, ImaginaryParts : { Types.ImaginaryBox })
+	local Original = State.DirtyGroupData[DirtyGroupID].OriginalPart
+
+	local FallingGroupID = Original:GetAttribute(Settings.FALLING_GROUP_ID_ATTRIBUTE_NAME)
+	if not FallingGroupID then
+		GreedyMeshRelativeTo(State.DirtyGroupMembers[DirtyGroupID], ImaginaryParts, Original.CFrame:ToWorldSpace(CFrame.new(-Original.Size*0.5)), DirtyGroupID)
+		return
+	end
+
+	-- { [BasePart] : boolean }, {ImaginaryBox}
+	local StaticMembers, StaticImaginaryParts = {}, {}
+	-- { [FallingGroupSectionID] : { [BasePart] : boolean } }, { [FallingGroupSectionID] : {ImaginaryBox} }
+	local FallingGroupSectionMembers, FallingGroupSectionImaginaryParts = {}, {}
+	for member in pairs(State.DirtyGroupMembers[DirtyGroupID]) do
+		local FallingGroupSectionID = member:GetAttribute(Settings.FALLING_GROUP_SECTION_ID_ATTRIBUTE_NAME)
+		if not FallingGroupSectionID then
+			StaticMembers[member] = true
+		elseif State.ChangedFallingGroupSections[FallingGroupSectionID] then
+			local SectionMembers = FallingGroupSectionMembers[FallingGroupSectionID]
+			if not SectionMembers then
+				SectionMembers = {}
+				FallingGroupSectionMembers[FallingGroupSectionID] = SectionMembers
+			end
+			if not FallingGroupSectionImaginaryParts[FallingGroupSectionID] then
+				FallingGroupSectionImaginaryParts[FallingGroupSectionID] = {}
+			end
+			SectionMembers[member] = true
+		end
+	end
+	for _, imaginaryMember in ipairs(ImaginaryParts) do
+		local FallingGroupSectionID = imaginaryMember.FallingGroupSectionID
+		if not FallingGroupSectionID then
+			table.insert(StaticImaginaryParts, imaginaryMember)
+		elseif State.ChangedFallingGroupSections[FallingGroupSectionID] then
+			local SectionImaginaryMembers = FallingGroupSectionImaginaryParts[FallingGroupSectionID]
+			if not SectionImaginaryMembers then
+				SectionImaginaryMembers = {}
+				FallingGroupSectionImaginaryParts[FallingGroupSectionID] = SectionImaginaryMembers
+			end
+			if not FallingGroupSectionMembers[FallingGroupSectionID] then
+				FallingGroupSectionMembers[FallingGroupSectionID] = {}
+			end
+			table.insert(SectionImaginaryMembers, imaginaryMember)
+		end
+	end
+
+	if next(StaticMembers) or #StaticImaginaryParts > 0 then
+		GreedyMeshRelativeTo(StaticMembers, StaticImaginaryParts, Original.CFrame:ToWorldSpace(CFrame.new(-Original.Size*0.5)), DirtyGroupID)
+	end
+
+	for FallingGroupSectionID, SectionMembers in pairs(FallingGroupSectionMembers) do
+		local SectionAnchor = State.FallingGroupSectionAnchors[FallingGroupID][FallingGroupSectionID]
+		GreedyMeshRelativeTo(SectionMembers, FallingGroupSectionImaginaryParts[FallingGroupSectionID], SectionAnchor.CFrame:ToWorldSpace(State.FallingDirtyGroupMinCornerLocalToAnchor[DirtyGroupID]), DirtyGroupID, FallingGroupSectionID)
+	end
 end
 
 

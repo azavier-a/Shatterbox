@@ -1,3 +1,6 @@
+--!native
+--!optimize 2
+
 --#selene: allow(unused_variable)
 
 --[=[
@@ -16,10 +19,17 @@ Settings.INDESTRUCTIBLE_TAG = "Indestructible"
 
 Settings.DEBRIS_TAG = "ShatterboxDebris"
 
+Settings.FALLING_GROUP_TAG = "FallingGroup"
+
+Settings.BLOCK_CLIENT_SERVER_TAG = "BlockClientServer"
+
+
 Settings.DIRTY_GROUP_ID_ATTRIBUTE_NAME = "DirtyGroupID"
 
+Settings.FALLING_GROUP_ID_ATTRIBUTE_NAME = "FallingGroupID"
+
+Settings.FALLING_GROUP_SECTION_ID_ATTRIBUTE_NAME = "FallingGroupSectionID"
 --Settings.ROOT_TAG = "Root"
---Settings.FALLING_GROUP_TAG = "FallingGroup"
 
 
 --[=[
@@ -90,6 +100,28 @@ Settings.DefaultGridSize = 1
 	@tag PartDivision
 ]=]
 Settings.UseGreedyMeshing = true
+
+--[=[
+	Whether or not to enforce a strict grid for destructible parts. This is required for Greedy Meshing to work alongside a changing [DestructionParams.GridSize].
+
+	If true, all destructible parts are forced to have a Total Grid Length snapped to the nearest power of 2.
+
+	For example, a destructible part may be 1 voxel long, 2 voxels long, 4 voxels long, 8 voxels long, ect.
+
+	We are not talking about the size of the voxels themselves, but the number of voxels that fit along the length of the part.
+
+	This means the size of voxels on an axis is restricted to the original part size on that axis divided by a power of 2.
+
+	:::danger
+	This setting MUST be true if you want Greedy Meshing to work with dynamic grid sizes.
+
+	If you want to use Greedy Meshing without a strict grid, you cannot use [DestructionParams.GridSize] and you must make sure each part only has a single grid size applied to it (either by using GridSize number attribute or by using the DefaultGridSize setting).
+	:::
+	@prop StrictGrid boolean
+	@within Settings
+	@tag PartDivision
+]=]
+Settings.StrictGrid = true
 
 --[=[
 	What happens to destructible parts that cannot be divided by Shatterbox.

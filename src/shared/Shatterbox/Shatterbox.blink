@@ -138,6 +138,13 @@ event SignalResetArea {
 	Data: (CFrame, vector)
 }
 
+event SignalResetDirtyGroup {
+	From: Server,
+	Type: Reliable,
+	Call: ManyAsync,
+	Data: GUID
+}
+
 
 
 

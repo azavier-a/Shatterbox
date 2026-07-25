@@ -16,13 +16,14 @@ local Types = require(src:WaitForChild("Types"))
 local WHITE = Color3.new(1, 1, 1)
 
 
-local function GetCondensedGUID()
-	return string.gsub(HttpService:GenerateGUID(false), '-', '')
-end
 
 
 local Serializer = {}
 
+local function GetCondensedGUID()
+	return string.gsub(HttpService:GenerateGUID(false), '-', '')
+end
+Serializer.GetCondensedGUID = GetCondensedGUID
 
 -- Validates destruction parameters
 local function ValidateDestructionParams(Parameters : Types.DestructionParams | Types.ImaginaryDestructionParams)
