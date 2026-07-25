@@ -291,7 +291,7 @@ local function ImaginaryVoxels(params, destructibleParts, dirtyGroups)
         end
 	end
 
-	if #partsInPart == 0 then return nil, existingDebris, AffectedDirtyGroups end
+	if #partsInPart == 0 then return nil, existingDebris, AffectedDirtyGroups, 0 end
 
 	local toUseVoxelSize : { [string] : Vector3 }
 	-- Handle active VoxelSize switching for the affected dirty groups
@@ -402,13 +402,13 @@ local function ImaginaryVoxels(params, destructibleParts, dirtyGroups)
     end
 
 	return
-        setmetatable(voxels, {
-            __len = function() return voxelCount end
-        }) :: {Types.ImaginaryVoxel},
+        voxels :: {Types.ImaginaryVoxel},
 
         existingDebris :: {BasePart},
 
-        AffectedDirtyGroups :: {[string] : boolean}
+        AffectedDirtyGroups :: {[string] : boolean},
+
+		voxelCount :: number
 end
 ShatterQueueLogic.ImaginaryVoxels = ImaginaryVoxels
 
@@ -482,7 +482,7 @@ function ShatterQueueLogic.Heartbeat()
 		local ManualVoxelInstantiation = popped.ManualVoxelInstantiation
 		local CuttingPart, UserData = popped.CuttingPart, popped.UserData
 
-		local ivoxels, existingDebris, affectedIDs = ImaginaryVoxels(popped)
+		local ivoxels, existingDebris, affectedIDs, destroyedVoxelCount = ImaginaryVoxels(popped)
 
 		if ivoxels then
 			if State.OnVoxelDestructRegistry[OnVoxelDestruct] then
@@ -519,9 +519,9 @@ function ShatterQueueLogic.Heartbeat()
 
 		if OnDestructCompleted then
 			if typeof(OnDestructCompleted) == "string" then
-				HandleOnDestructCompleted(OnDestructCompleted, ivoxels and #ivoxels or 0, affectedIDs, popped)
+				HandleOnDestructCompleted(OnDestructCompleted, destroyedVoxelCount, affectedIDs, popped)
 			else
-				local s, res = pcall(OnDestructCompleted, ivoxels and #ivoxels or 0, affectedIDs, popped)
+				local s, res = pcall(OnDestructCompleted, destroyedVoxelCount, affectedIDs, popped)
 				if not s then
 					warn("OnDestructCompleted failed: ", res)
 				end

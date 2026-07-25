@@ -164,10 +164,15 @@ local function DestroyPart(part : BasePart)
 	local FallingGroupSectionID = part:GetAttribute(Settings.FALLING_GROUP_SECTION_ID_ATTRIBUTE_NAME)
 	if FallingGroupSectionID then
 		local FallingGroupID = part:GetAttribute(Settings.FALLING_GROUP_ID_ATTRIBUTE_NAME)
-		State.FallingGroupSectionMembers[FallingGroupID][FallingGroupSectionID][part] = nil
+		if State.FallingGroupSectionMembers[FallingGroupID] and State.FallingGroupSectionMembers[FallingGroupID][FallingGroupSectionID] then
+			State.FallingGroupSectionMembers[FallingGroupID][FallingGroupSectionID][part] = nil
+		end
 		if State.FallingGroupPartWeldMap[part] then
 			State.FallingGroupPartWeldMap[part]:Destroy()
 			State.FallingGroupPartWeldMap[part] = nil
+		end
+		if dirtyGroupData and part == dirtyGroupData.OriginalPart then
+			part:SetAttribute(Settings.FALLING_GROUP_SECTION_ID_ATTRIBUTE_NAME)
 		end
 	end
 

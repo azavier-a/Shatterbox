@@ -456,13 +456,14 @@ end
 
 	@return {ImaginaryVoxel}
 	@return {BasePart}
+	@return number
 
 	@within Hitbox
 ]=]
-function HitboxMT:ImaginaryVoxels() : ({Types.ImaginaryVoxel}, {BasePart})
-	local voxels, existingDebris = Shatterbox.ImaginaryVoxels(self)
+function HitboxMT:ImaginaryVoxels() : ({Types.ImaginaryVoxel}, {BasePart}, number)
+	local voxels, existingDebris, countVoxelsDestroyed = Shatterbox.ImaginaryVoxels(self)
 	self.ExcludePlayersReplication = {} -- QOL automatically clear the exlcusion after the destruction is performed
-	return voxels, existingDebris
+	return voxels, existingDebris, countVoxelsDestroyed
 end
 
 --[=[

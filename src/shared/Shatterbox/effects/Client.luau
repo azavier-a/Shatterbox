@@ -57,6 +57,12 @@ end
 
 
 
+-- Effect used by Shatterbox.ImaginaryVoxels to return an array of imaginary voxels as well as an array of existing debris
+ClientEffects.CollectVoxelsAndDebris = function(voxel, info : Types.DestroyedVoxelInfo)
+    table.insert(info.IsAlreadyDebris and info.UserData.ExistingDebris or info.UserData.ImaginaryVoxels, voxel)
+end
+
+
 
 
 
@@ -67,7 +73,7 @@ end
 -- Also define your client side OnDestructCompleted callbacks here. This works the same way as OnVoxelDestruct.
 --[[
 
-DestructCompleted.CompletedName = function(voxelCount, affectedIDs)
+DestructCompleted.CompletedName = function(voxelCount, affectedIDs, destructionParams)
 
 
 end
@@ -76,11 +82,10 @@ end
 
 
 
-
-
-
-
-
+-- OnDestructCompleted used by Shatterbox.ImaginaryVoxels to return the number of destroyed voxels
+DestructCompleted.CollectDestroyedVoxelCount = function(voxelCount, affectedIDs, destructionParams)
+    destructionParams.UserData.DestroyedVoxelCount = voxelCount
+end
 
 
 

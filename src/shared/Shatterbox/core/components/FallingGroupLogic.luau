@@ -65,6 +65,7 @@ local function FindChunkParts(ToProcessMap : { [BasePart] : boolean }, StartingP
 				if inAxisIsAFallingGroup and inAxisFallingGroupID ~= FallingGroupID then continue end
 
 				ToProcessMap[inAxis] = nil
+				if inAxis:HasTag(Settings.DEBRIS_TAG) then continue end
 
 				if not inAxisIsAFallingGroup and not FallingGroupSectionID then
 					hasPathToGround = true

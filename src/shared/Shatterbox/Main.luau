@@ -206,43 +206,41 @@ end
 
 
 --[=[
-	Instantly performs voxel destruction around the hitbox according to the `params` supplied.
+	Performs voxel destruction around the hitbox according to the `params` supplied.
 
-	Returns the imaginary voxels to be created as well as any existing debris encountered.
+	Yields until the end of the current Heartbeat, returns the imaginary voxels to be created, any existing debris encountered, and the number of voxels this destruction destroyed.
 
-	These are to be instantiated using [Shatterbox.InstantiateImaginaryVoxel].
+	These imaginary voxels are to be instantiated using [Shatterbox.InstantiateImaginaryVoxel].
 
-	:::warning
-	If you use SkipEncapsulatedVoxels, the #length of the imaginary voxels array will show up as larger than it really is.
-
-	This is to give the same functionality as [OnDestructCompleted voxelCount](/api/Shatterbox#OnDestructCompleted) without the need for a third return value.
-
-	Use `ipairs` or generalized iteration to iterate over this array.
-	:::
+	@deprecated Release 9 -- Use [Shatterbox.Destroy] and a destruction effect instead.
 	@param params DestructionParameters | Hitbox
 	@return {ImaginaryVoxel}
 	@return {BasePart}
+	@return number
 ]=]
-function Shatterbox.ImaginaryVoxels(params : Types.ImaginaryDestructionParams) : ({Types.ImaginaryVoxel}, {BasePart})
+function Shatterbox.ImaginaryVoxels(params : Types.ImaginaryDestructionParams) : ({Types.ImaginaryVoxel}, {BasePart}, number)
+	local destructionParams = Serializer.ValidateDestructionParams(params)
+	destructionParams.ManualVoxelInstantiation = true
+	destructionParams.OnVoxelDestruct = "CollectVoxelsAndDebris"
+	destructionParams.OnDestructCompleted = "CollectDestroyedVoxelCount"
 
-	local did, voxels, existingDebris = ShatterQueueLogic.ModelQueueBehavior(Shatterbox.ImaginaryVoxels, params)
-	if did then return voxels, existingDebris end
+	local imaginaryVoxels, existingDebris = {}, {}
+	destructionParams.UserData.ImaginaryVoxels = imaginaryVoxels
+	destructionParams.UserData.ExistingDebris = existingDebris
 
-	local Parameters = Serializer.ValidateDestructionParams(params)
+	Shatterbox.Destroy(destructionParams)
 
-	local destructibleParts, createdDirtyGroups, _, affectedIDs = ShatterQueueLogic.GetDestructibleParts(Parameters)
+	RunService.Heartbeat:Wait()
+	local thread = coroutine.running()
+	task.defer(function()
+		destructionParams.UserData.ImaginaryVoxels = nil
+		destructionParams.UserData.ExistingDebris = nil
+		local destroyedVoxelCount = destructionParams.UserData.DestroyedVoxelCount
+		destructionParams.UserData.DestroyedVoxelCount = nil
 
-	if Settings.USE_CLIENT_SERVER then
-		if isServer then
-			ClientServerLogic.ReplicateDestructionToClients("IMAGINARY", Parameters, createdDirtyGroups)
-		else
-			ClientServerLogic.SendDirtyGroupsToServer(createdDirtyGroups)
-		end
-	end
-
-	voxels, existingDebris = ShatterQueueLogic.ImaginaryVoxels(Parameters, destructibleParts, affectedIDs)
-
-	return voxels or {}, existingDebris
+		task.spawn(thread, imaginaryVoxels, existingDebris, destroyedVoxelCount)
+	end)
+	return coroutine.yield()
 end
 
 
