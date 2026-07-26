@@ -136,10 +136,30 @@ function FallingGroupLogic.Heartbeat()
 	-- [FallingGroupID] : {BasePart}
 	local FallingGroupMembersToProcess = {} :: { [string] : { [BasePart] : boolean } }
 
+	local DirtyGroupsToProcess, VisitedFallingGroups = {}, {}
 	for DirtyGroupID in pairs(State.ChangedDirtyGroups) do
 		local OriginalPart = State.DirtyGroupData[DirtyGroupID].OriginalPart
 		local FallingGroupID = OriginalPart:GetAttribute(Settings.FALLING_GROUP_ID_ATTRIBUTE_NAME)
-		if not FallingGroupID then continue end
+		if not FallingGroupID or VisitedFallingGroups[FallingGroupID] then continue end
+		local shouldProcessWholeFallingGroup = false
+		for member in pairs(State.DirtyGroupMembers[DirtyGroupID]) do
+			if member:GetAttribute("FallingGroupSectionID") then continue end
+			shouldProcessWholeFallingGroup = true
+			break
+		end
+		if shouldProcessWholeFallingGroup then
+			VisitedFallingGroups[FallingGroupID] = true
+			for FallingGroupMemberDirtyGroupID in pairs(State.FallingGroupDirtyGroups[FallingGroupID]) do
+				DirtyGroupsToProcess[FallingGroupMemberDirtyGroupID] = true
+			end
+		else
+			DirtyGroupsToProcess[DirtyGroupID] = true
+		end
+	end
+
+	for DirtyGroupID in pairs(DirtyGroupsToProcess) do
+		local OriginalPart = State.DirtyGroupData[DirtyGroupID].OriginalPart
+		local FallingGroupID = OriginalPart:GetAttribute(Settings.FALLING_GROUP_ID_ATTRIBUTE_NAME)
 
 		local ToProcess = FallingGroupMembersToProcess[FallingGroupID]
 		if not ToProcess then
@@ -147,14 +167,19 @@ function FallingGroupLogic.Heartbeat()
 			FallingGroupMembersToProcess[FallingGroupID] = ToProcess
 		end
 
+		if not next(State.DirtyGroupMembers[DirtyGroupID]) then
+			ToProcess[OriginalPart] = true
+			continue
+		end
+
 		for member in pairs(State.DirtyGroupMembers[DirtyGroupID]) do
-			local FallingGroupSectionID = member:GetAttribute(Settings.FALLING_GROUP_SECTION_ID_ATTRIBUTE_NAME)
-			if FallingGroupSectionID then
-				for sectionMember in pairs(State.FallingGroupSectionMembers[FallingGroupID][FallingGroupSectionID]) do
-					ToProcess[sectionMember] = true
-				end
-			else
+			if VisitedFallingGroups[FallingGroupID] then
 				ToProcess[member] = true
+				continue
+			end
+			local FallingGroupSectionID = member:GetAttribute(Settings.FALLING_GROUP_SECTION_ID_ATTRIBUTE_NAME)
+			for sectionMember in pairs(State.FallingGroupSectionMembers[FallingGroupID][FallingGroupSectionID]) do
+				ToProcess[sectionMember] = true
 			end
 		end
 	end
